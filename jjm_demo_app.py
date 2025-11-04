@@ -4,6 +4,7 @@ import numpy as np
 import datetime
 from sqlalchemy import create_engine, text
 import matplotlib.pyplot as plt
+import random
 
 # --- Page Config ---
 st.set_page_config(page_title="JJM Role Dashboard", layout="wide")
@@ -36,6 +37,52 @@ with engine.connect() as conn:
     )
     """))
 
+# ------------------------------------------------------------------
+# 🔹 DEMO DATA GENERATOR
+st.markdown("### 🧪 Demo Data Generator")
+st.write("Click below to create random sample schemes and readings for testing.")
+
+if st.button("Generate Demo Data"):
+    with engine.begin() as conn:
+        # Clear old data
+        conn.execute(text("DELETE FROM schemes"))
+        conn.execute(text("DELETE FROM bfm_readings"))
+
+        # Create 5 random schemes (some functional, some not)
+        schemes_data = []
+        for i in range(5):
+            schemes_data.append({
+                "scheme_name": f"Scheme_{i+1}",
+                "functional": random.choice([0, 1]),
+                "so_name": "SO-Guwahati"
+            })
+        for row in schemes_data:
+            conn.execute(text("""
+                INSERT INTO schemes (scheme_name, functional, so_name)
+                VALUES (:scheme_name, :functional, :so_name)
+            """), row)
+
+        # Insert random readings for the past 7 days
+        jalmitras = ["JM-1", "JM-2", "JM-3"]
+        today = datetime.date.today()
+        for day_offset in range(7):
+            date_str = (today - datetime.timedelta(days=day_offset)).isoformat()
+            for jm in jalmitras:
+                for s_id in range(1, 6):
+                    if random.random() > 0.3:  # 70% chance a reading exists
+                        conn.execute(text("""
+                            INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date)
+                            VALUES (:scheme_id, :jalmitra, :reading, :reading_date)
+                        """), {
+                            "scheme_id": s_id,
+                            "jalmitra": jm,
+                            "reading": round(random.uniform(100.0, 900.0), 2),
+                            "reading_date": date_str
+                        })
+    st.success("✅ Demo data created successfully! Scroll down to see the dashboard.")
+st.markdown("---")
+# ------------------------------------------------------------------
+
 # --- Role selection ---
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
 
@@ -51,7 +98,7 @@ if role == "Section Officer":
     st.dataframe(schemes)
 
     # Functional schemes
-    functional_schemes = schemes[schemes['functional']==1]
+    functional_schemes = schemes[schemes['functional'] == 1]
     st.subheader("Functional schemes under SO")
     st.dataframe(functional_schemes)
 
@@ -67,7 +114,7 @@ if role == "Section Officer":
             WHERE b.reading_date = :today AND s.functional=1 AND s.so_name=:so
         """), conn, params={"today": today, "so": so_name})
 
-    st.subheader(f"Number of BFM readings updated by Jalmitras today")
+    st.subheader("Number of BFM readings updated by Jalmitras today")
     st.write(len(readings_today))
 
     # Matrix: today's readings by Jalmitras vs functional schemes
@@ -80,13 +127,14 @@ if role == "Section Officer":
 
     # Matrix: absent readings (functional schemes not updated)
     if not functional_schemes.empty:
-        all_jalmitras = ["JM-1","JM-2","JM-3"]  # Example Jalmitras
+        all_jalmitras = ["JM-1", "JM-2", "JM-3"]
         all_scheme_ids = functional_schemes['id'].tolist()
         absent_list = []
         for j in all_jalmitras:
             for s_id in all_scheme_ids:
-                if readings_today.empty or not ((readings_today['jalmitra']==j) & (readings_today['scheme_name']==functional_schemes[functional_schemes['id']==s_id]['scheme_name'].values[0])).any():
-                    absent_list.append({"jalmitra": j, "scheme_id": s_id})
+                scheme_name = functional_schemes.loc[functional_schemes['id'] == s_id, 'scheme_name'].values[0]
+                if readings_today.empty or not ((readings_today['jalmitra'] == j) & (readings_today['scheme_name'] == scheme_name)).any():
+                    absent_list.append({"jalmitra": j, "scheme": scheme_name})
         absent_df = pd.DataFrame(absent_list)
         st.subheader("Absent readings by Jalmitras")
         st.dataframe(absent_df)
@@ -108,4 +156,3 @@ if role == "Section Officer":
         st.line_chart(pivot_chart)
     else:
         st.info("No readings in last 7 days.")
-

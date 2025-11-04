@@ -6,7 +6,7 @@
 # - Functional/non-functional schemes
 # - BFM readings & water quantity per Jalmitra
 # - Last 7 days water supplied graph
-# - Compact pie chart for schemes functionality
+# - Compact side-by-side pie chart for schemes
 
 import streamlit as st
 import pandas as pd
@@ -55,8 +55,8 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("Generate Demo Data"):
         so_name = "SO-Guwahati"
-        schemes_list = [f"Scheme {chr(65+i)}" for i in range(20)]  # Scheme A-T
-        jalmitras = [f"JM-{i+1}" for i in range(20)]  # One Jalmitra per scheme
+        schemes_list = [f"Scheme {chr(65+i)}" for i in range(20)]
+        jalmitras = [f"JM-{i+1}" for i in range(20)]
 
         with engine.begin() as conn:
             # Clear old data
@@ -118,78 +118,82 @@ if role == "Section Officer":
     with engine.connect() as conn:
         schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name=:so"), conn, params={"so": so_name})
 
-    # --- Compact Pie Chart for Functional vs Non-Functional Schemes ---
-    st.subheader("📊 Scheme Functionality Overview")
-    func_counts = schemes['functionality'].value_counts()
-    fig1, ax1 = plt.subplots(figsize=(4, 4))  # Compact size
-    ax1.pie(func_counts, labels=None, autopct='%1.0f%%', startangle=90, colors=['#4CAF50','#F44336'])
-    ax1.set_title("Functional vs Non-Functional Schemes", fontsize=12)
-    plt.tight_layout()
-    st.pyplot(fig1)
+    if not schemes.empty:
+        # --- Side-by-side: Pie Chart + All Schemes Table ---
+        st.subheader("📊 Scheme Functionality Overview")
+        col_chart, col_table = st.columns([1,3])
 
-    st.markdown("---")
-    st.subheader("All Schemes under SO")
-    st.dataframe(schemes)
+        func_counts = schemes['functionality'].value_counts()
+        fig1, ax1 = plt.subplots(figsize=(4,4))  # Compact size
+        ax1.pie(func_counts, labels=None, autopct='%1.0f%%', startangle=90, colors=['#4CAF50','#F44336'])
+        ax1.set_title("Functional vs Non-Functional", fontsize=12)
+        plt.tight_layout()
 
-    # Functional schemes table
-    functional_schemes = schemes[schemes['functionality'] == "Functional"]
-    st.subheader("Functional Schemes under SO")
-    st.dataframe(functional_schemes)
+        with col_chart:
+            st.pyplot(fig1)
 
-    today = datetime.date.today().isoformat()
+        with col_table:
+            st.dataframe(schemes)
 
-    # --- Today's readings (Functional only) ---
-    with engine.connect() as conn:
-        readings_today = pd.read_sql(text("""
-            SELECT s.scheme_name, b.jalmitra, b.reading, b.reading_time, b.water_quantity
-            FROM bfm_readings b
-            JOIN schemes s ON b.scheme_id = s.id
-            WHERE b.reading_date = :today
-            AND s.functionality='Functional'
-            AND s.so_name=:so
-        """), conn, params={"today": today, "so": so_name})
+        # Functional schemes table
+        functional_schemes = schemes[schemes['functionality'] == "Functional"]
+        st.subheader("Functional Schemes under SO")
+        st.dataframe(functional_schemes)
 
-    st.subheader("BFM Readings by Jalmitras Today")
-    st.write(f"Total readings recorded today: {len(readings_today)}")
-    if not readings_today.empty:
-        st.dataframe(readings_today)
-    else:
-        st.info("No readings recorded today.")
+        today = datetime.date.today().isoformat()
 
-    # --- Water quantity matrix ---
-    if not readings_today.empty:
-        quantity_matrix = readings_today.pivot_table(index="jalmitra", columns="scheme_name",
-                                                     values="water_quantity", aggfunc="sum").fillna(0)
-        st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra per Scheme")
-        st.dataframe(quantity_matrix)
+        # --- Today's readings (Functional only) ---
+        with engine.connect() as conn:
+            readings_today = pd.read_sql(text("""
+                SELECT s.scheme_name, b.jalmitra, b.reading, b.reading_time, b.water_quantity
+                FROM bfm_readings b
+                JOIN schemes s ON b.scheme_id = s.id
+                WHERE b.reading_date = :today
+                AND s.functionality='Functional'
+                AND s.so_name=:so
+            """), conn, params={"today": today, "so": so_name})
 
-    # --- Absent Jalmitras per scheme ---
-    all_jalmitras = [f"JM-{i+1}" for i in range(20)]
-    absent_list = []
-    for j in all_jalmitras:
-        for s_name in functional_schemes["scheme_name"]:
-            if readings_today.empty or not ((readings_today["jalmitra"] == j) & (readings_today["scheme_name"] == s_name)).any():
-                absent_list.append({"jalmitra": j, "scheme_name": s_name})
-    absent_df = pd.DataFrame(absent_list)
-    st.subheader("Absent Readings by Jalmitras")
-    st.dataframe(absent_df)
+        st.subheader("BFM Readings by Jalmitras Today")
+        st.write(f"Total readings recorded today: {len(readings_today)}")
+        if not readings_today.empty:
+            st.dataframe(readings_today)
+        else:
+            st.info("No readings recorded today.")
 
-    # --- Last 7 Days — Water Quantity Graph ---
-    week_ago = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
-    with engine.connect() as conn:
-        last_week_qty = pd.read_sql(text("""
-            SELECT s.scheme_name, b.reading_date, SUM(b.water_quantity) AS total_water_m3
-            FROM bfm_readings b
-            JOIN schemes s ON b.scheme_id = s.id
-            WHERE b.reading_date BETWEEN :week_ago AND :today
-            AND s.so_name = :so
-            AND s.functionality = 'Functional'
-            GROUP BY s.scheme_name, b.reading_date
-        """), conn, params={"week_ago": week_ago, "today": today, "so": so_name})
+        # --- Water quantity matrix ---
+        if not readings_today.empty:
+            quantity_matrix = readings_today.pivot_table(index="jalmitra", columns="scheme_name",
+                                                         values="water_quantity", aggfunc="sum").fillna(0)
+            st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra per Scheme")
+            st.dataframe(quantity_matrix)
 
-    if not last_week_qty.empty:
-        pivot_chart = last_week_qty.pivot(index="reading_date", columns="scheme_name", values="total_water_m3").fillna(0)
-        st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
-        st.line_chart(pivot_chart)
-    else:
-        st.info("No data found for the past 7 days.")
+        # --- Absent Jalmitras per scheme ---
+        all_jalmitras = [f"JM-{i+1}" for i in range(20)]
+        absent_list = []
+        for j in all_jalmitras:
+            for s_name in functional_schemes["scheme_name"]:
+                if readings_today.empty or not ((readings_today["jalmitra"] == j) & (readings_today["scheme_name"] == s_name)).any():
+                    absent_list.append({"jalmitra": j, "scheme_name": s_name})
+        absent_df = pd.DataFrame(absent_list)
+        st.subheader("Absent Readings by Jalmitras")
+        st.dataframe(absent_df)
+
+        # --- Last 7 Days — Water Quantity Graph ---
+        week_ago = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
+        with engine.connect() as conn:
+            last_week_qty = pd.read_sql(text("""
+                SELECT s.scheme_name, b.reading_date, SUM(b.water_quantity) AS total_water_m3
+                FROM bfm_readings b
+                JOIN schemes s ON b.scheme_id = s.id
+                WHERE b.reading_date BETWEEN :week_ago AND :today
+                AND s.so_name = :so
+                AND s.functionality = 'Functional'
+                GROUP BY s.scheme_name, b.reading_date
+            """), conn, params={"week_ago": week_ago, "today": today, "so": so_name})
+
+        if not last_week_qty.empty:
+            pivot_chart = last_week_qty.pivot(index="reading_date", columns="scheme_name", values="total_water_m3").fillna(0)
+            st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
+            st.line_chart(pivot_chart)
+        else:
+            st.info("No data found for the past 7 days.")

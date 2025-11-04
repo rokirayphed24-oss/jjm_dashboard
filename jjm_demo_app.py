@@ -32,7 +32,7 @@ with engine.connect() as conn:
     CREATE TABLE IF NOT EXISTS schemes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scheme_name TEXT,
-        functionality TEXT,  -- Functional / Non-Functional
+        functionality TEXT,
         so_name TEXT
     )
     """))
@@ -128,9 +128,9 @@ if role == "Section Officer":
 
     # --- Pie chart: Functional vs Non-Functional Schemes ---
     func_counts = schemes['functionality'].value_counts()
-    fig1, ax1 = plt.subplots()
+    fig1, ax1 = plt.subplots(figsize=(4, 4))  # smaller figure
     ax1.pie(func_counts, labels=func_counts.index, autopct='%1.1f%%', startangle=90, colors=['#4CAF50','#F44336'])
-    ax1.set_title("Scheme Functionality Distribution")
+    ax1.set_title("Scheme Functionality Distribution", fontsize=10)
     st.pyplot(fig1)
 
     today = datetime.date.today().isoformat()
@@ -160,9 +160,9 @@ if role == "Section Officer":
     counts = [len(updated_jalmitras), len(absent_jalmitras)]
     labels = ["Updated", "Absent"]
     colors = ['#2196F3','#FF9800']
-    fig2, ax2 = plt.subplots()
+    fig2, ax2 = plt.subplots(figsize=(4, 4))  # smaller figure
     ax2.pie(counts, labels=labels, autopct='%1.1f%%', startangle=90, colors=colors)
-    ax2.set_title("Jalmitra Updates vs Absentees")
+    ax2.set_title("Jalmitra Updates vs Absentees", fontsize=10)
     st.pyplot(fig2)
 
     # --- Water quantity matrix ---

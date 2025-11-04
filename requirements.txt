@@ -1,7 +1,8 @@
 streamlit
-pytesseract
 pandas
 numpy
-Pillow
-opencv-python
 sqlalchemy
+opencv-python-headless
+pytesseract
+Pillow
+

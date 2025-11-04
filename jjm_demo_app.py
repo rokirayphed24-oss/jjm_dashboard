@@ -30,7 +30,7 @@ engine = create_engine(f"sqlite:///{DB_FILE}", connect_args={"check_same_thread"
 with engine.connect() as conn:
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS schemes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scheme_id INTEGER PRIMARY KEY AUTOINCREMENT,
         scheme_name TEXT,
         functionality TEXT,
         so_name TEXT
@@ -38,7 +38,7 @@ with engine.connect() as conn:
     """))
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS bfm_readings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scheme_id INTEGER PRIMARY KEY AUTOINCREMENT,
         scheme_id INTEGER,
         jalmitra TEXT,
         reading INTEGER,
@@ -196,3 +196,4 @@ if role == "Section Officer":
             st.line_chart(pivot_chart)
         else:
             st.info("No data found for the past 7 days.")
+

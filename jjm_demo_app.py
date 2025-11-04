@@ -1,3 +1,12 @@
+# jjm_demo_app.py
+# Streamlit dashboard for Jal Jeevan Mission — SO Role
+# Features:
+# - Landing page with role selection
+# - Demo data generator & remover
+# - Functional/Non-functional schemes
+# - BFM readings & water quantity per Jalmitra
+# - Last 7 days water supplied chart
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,23 +16,13 @@ from sqlalchemy import create_engine, text
 
 # --- Page Config ---
 st.set_page_config(page_title="JJM Role Dashboard", layout="wide")
-
 st.image("logo.jpg", width=180)
-st.title("Jal Jeevan Mission —  Dashboard")
+st.title("Jal Jeevan Mission — Landing Dashboard")
 st.markdown("---")
 
-# --- Database setup (simulate SQLite) ---
+# --- Database setup (SQLite) ---
 DB_FILE = "jjm_demo.sqlite"
 engine = create_engine(f"sqlite:///{DB_FILE}", connect_args={"check_same_thread": False})
-
-# Temporary patch: rename 'functional' column to 'functionality' if exists
-with engine.connect() as conn:
-    try:
-        conn.execute(text("ALTER TABLE schemes RENAME COLUMN functional TO functionality"))
-        conn.commit()
-    except Exception:
-        pass  # ignore if already renamed
-
 
 # Create tables if not exist
 with engine.connect() as conn:
@@ -47,55 +46,55 @@ with engine.connect() as conn:
     )
     """))
 
-# ------------------------------------------------------------------
-# 🔹 DEMO DATA GENERATOR / REMOVER
+# --- Demo Data Generator / Remover ---
 st.markdown("### 🧪 Demo Data Management")
-
 col1, col2 = st.columns(2)
 
 with col1:
     if st.button("Generate Demo Data"):
+        so_name = "SO-Guwahati"
+        schemes_list = [f"Scheme {chr(65+i)}" for i in range(20)]  # Scheme A-T
+        jalmitras = [f"JM-{i+1}" for i in range(20)]  # One Jalmitra per scheme
+
         with engine.begin() as conn:
+            # Clear old data
             conn.execute(text("DELETE FROM schemes"))
             conn.execute(text("DELETE FROM bfm_readings"))
 
-            # Create 20 random schemes
-            schemes_data = []
-            for i in range(20):
-                schemes_data.append({
-                    "scheme_name": f"Scheme_{i+1}",
-                    "functionality": random.choice(["Functional", "Non-Functional"]),
-                    "so_name": "SO-Guwahati"
-                })
-            for row in schemes_data:
+            # Insert schemes
+            for i, scheme in enumerate(schemes_list):
+                functionality = random.choice(["Functional", "Non-Functional"])
                 conn.execute(text("""
                     INSERT INTO schemes (scheme_name, functionality, so_name)
                     VALUES (:scheme_name, :functionality, :so_name)
-                """), row)
+                """), {"scheme_name": scheme, "functionality": functionality, "so_name": so_name})
 
-            # Create random readings for 7 days
-            jalmitras = ["JM-1", "JM-2", "JM-3", "JM-4"]
+            # Fetch scheme IDs
+            schemes_df = pd.read_sql("SELECT * FROM schemes", conn)
+
+            # Generate readings only for Functional schemes
             today = datetime.date.today()
-            for day_offset in range(7):
-                date_str = (today - datetime.timedelta(days=day_offset)).isoformat()
-                for jm in jalmitras:
-                    for s_id in range(1, 21):
-                        if random.random() > 0.4:  # 60% chance of reading
-                            random_reading = random.choice([110010, 215870, 325640, 458920, 562310, 674520])
-                            water_quantity = round(random.uniform(5.0, 50.0), 2)
-                            time_str = f"{random.randint(6,18)}:{random.randint(0,59):02d}:00"
-                            conn.execute(text("""
-                                INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
-                                VALUES (:scheme_id, :jalmitra, :reading, :reading_date, :reading_time, :water_quantity)
-                            """), {
-                                "scheme_id": s_id,
-                                "jalmitra": jm,
-                                "reading": random_reading,
-                                "reading_date": date_str,
-                                "reading_time": time_str,
-                                "water_quantity": water_quantity
-                            })
-        st.success("✅ Demo data (20 schemes & readings) generated successfully!")
+            random_readings = [110010, 215870, 150340, 189420, 200015, 234870]
+            for _, row in schemes_df.iterrows():
+                if row["functionality"] == "Functional":
+                    jalmitra = jalmitras[_ % len(jalmitras)]
+                    for d in range(7):  # last 7 days
+                        date = (today - datetime.timedelta(days=d)).isoformat()
+                        reading = random.choice(random_readings)
+                        water_qty = round(random.uniform(40.0, 200.0), 2)
+                        time = f"{random.randint(6,18)}:{random.choice(['00','30'])}:00"
+                        conn.execute(text("""
+                            INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
+                            VALUES (:scheme_id, :jalmitra, :reading, :reading_date, :reading_time, :water_quantity)
+                        """), {
+                            "scheme_id": row["id"],
+                            "jalmitra": jalmitra,
+                            "reading": reading,
+                            "reading_date": date,
+                            "reading_time": time,
+                            "water_quantity": water_qty
+                        })
+        st.success("✅ 20 demo schemes and 7 days of readings generated successfully!")
 
 with col2:
     if st.button("Remove Demo Data"):
@@ -105,9 +104,8 @@ with col2:
         st.warning("🗑️ All demo data removed successfully!")
 
 st.markdown("---")
-# ------------------------------------------------------------------
 
-# --- Role selection ---
+# --- Role Selection ---
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
 
 if role == "Section Officer":
@@ -120,25 +118,26 @@ if role == "Section Officer":
     st.subheader("All Schemes under SO")
     st.dataframe(schemes)
 
-    # Filter Functional schemes
+    # Functional schemes
     functional_schemes = schemes[schemes['functionality'] == "Functional"]
     st.subheader("Functional Schemes under SO")
     st.dataframe(functional_schemes)
 
     today = datetime.date.today().isoformat()
 
-    # --- Today's readings (Functional only)
+    # --- Today's readings (Functional schemes only) ---
     with engine.connect() as conn:
         readings_today = pd.read_sql(text("""
             SELECT s.scheme_name, b.jalmitra, b.reading, b.reading_time, b.water_quantity
             FROM bfm_readings b
             JOIN schemes s ON b.scheme_id = s.id
-            WHERE b.reading_date = :today AND s.functionality='Functional' AND s.so_name=:so
+            WHERE b.reading_date = :today
+            AND s.functionality='Functional'
+            AND s.so_name=:so
         """), conn, params={"today": today, "so": so_name})
 
     st.subheader("BFM Readings by Jalmitras Today")
     st.write(f"Total readings recorded today: {len(readings_today)}")
-
     if not readings_today.empty:
         st.dataframe(readings_today)
     else:
@@ -152,8 +151,8 @@ if role == "Section Officer":
     else:
         st.info("No water quantity data available.")
 
-    # --- Absent Jalmitras (didn't record today)
-    all_jalmitras = ["JM-1", "JM-2", "JM-3", "JM-4"]
+    # --- Absent Jalmitras ---
+    all_jalmitras = [f"JM-{i+1}" for i in range(20)]
     absent_list = []
     for j in all_jalmitras:
         for s_name in functional_schemes["scheme_name"]:
@@ -163,22 +162,22 @@ if role == "Section Officer":
     st.subheader("Absent Readings by Jalmitras")
     st.dataframe(absent_df)
 
-    # --- Graph: last 7 days readings (Functional schemes only)
+    # --- Last 7 Days — Water Quantity Graph ---
     week_ago = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
     with engine.connect() as conn:
-        last_week_readings = pd.read_sql(text("""
-            SELECT s.scheme_name, b.reading_date, SUM(b.reading) as total_reading
+        last_week_qty = pd.read_sql(text("""
+            SELECT s.scheme_name, b.reading_date, SUM(b.water_quantity) AS total_water_m3
             FROM bfm_readings b
             JOIN schemes s ON b.scheme_id = s.id
             WHERE b.reading_date BETWEEN :week_ago AND :today
-            AND s.functionality='Functional' AND s.so_name=:so
+            AND s.so_name = :so
+            AND s.functionality = 'Functional'
             GROUP BY s.scheme_name, b.reading_date
         """), conn, params={"week_ago": week_ago, "today": today, "so": so_name})
 
-    if not last_week_readings.empty:
-        pivot_chart = last_week_readings.pivot(index="reading_date", columns="scheme_name", values="total_reading").fillna(0)
-        st.subheader("📈 Last 7 Days — BFM Readings (Functional Schemes)")
+    if not last_week_qty.empty:
+        pivot_chart = last_week_qty.pivot(index="reading_date", columns="scheme_name", values="total_water_m3").fillna(0)
+        st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
         st.line_chart(pivot_chart)
     else:
-        st.info("No readings for the past 7 days.")
-
+        st.info("No data found for the past 7 days.")

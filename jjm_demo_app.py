@@ -3,10 +3,10 @@
 # Features:
 # - Landing page with role selection
 # - Demo data generator & remover
-# - Functional/non‑functional schemes
+# - Functional/non-functional schemes
 # - BFM readings & water quantity per Jalmitra
-# - Last 7 days water supplied chart
-# - Ultra‑compact side‑by‑side pie charts for schemes and Jalmitras
+# - Last 7 days water supplied graph
+# - Enlarged pie chart for schemes functionality
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,6 @@ import datetime
 import random
 from sqlalchemy import create_engine, text
 import matplotlib.pyplot as plt
-from io import BytesIO
 
 # --- Page Config ---
 st.set_page_config(page_title="JJM Role Dashboard", layout="wide")
@@ -55,27 +54,27 @@ col1, col2 = st.columns(2)
 
 with col1:
     if st.button("Generate Demo Data"):
-        so_name = "SO‑Guwahati"
-        schemes_list = [f"Scheme {chr(65+i)}" for i in range(20)]  # Scheme A‑T
-        jalmitras = [f"JM‑{i+1}" for i in range(20)]              # One Jalmitra per scheme
+        so_name = "SO-Guwahati"
+        schemes_list = [f"Scheme {chr(65+i)}" for i in range(20)]  # Scheme A-T
+        jalmitras = [f"JM-{i+1}" for i in range(20)]  # One Jalmitra per scheme
 
         with engine.begin() as conn:
-            # clear old data
+            # Clear old data
             conn.execute(text("DELETE FROM schemes"))
             conn.execute(text("DELETE FROM bfm_readings"))
 
-            # insert schemes
+            # Insert schemes
             for i, scheme in enumerate(schemes_list):
-                functionality = random.choice(["Functional", "Non‑Functional"])
+                functionality = random.choice(["Functional", "Non-Functional"])
                 conn.execute(text("""
-                   INSERT INTO schemes (scheme_name, functionality, so_name)
-                   VALUES (:scheme_name, :functionality, :so_name)
+                    INSERT INTO schemes (scheme_name, functionality, so_name)
+                    VALUES (:scheme_name, :functionality, :so_name)
                 """), {"scheme_name": scheme, "functionality": functionality, "so_name": so_name})
 
-            # fetch scheme ids
+            # Fetch scheme IDs
             schemes_df = pd.read_sql("SELECT * FROM schemes", conn)
 
-            # generate readings only for Functional schemes
+            # Generate readings only for Functional schemes
             today = datetime.date.today()
             random_readings = [110010, 215870, 150340, 189420, 200015, 234870]
             for _, row in schemes_df.iterrows():
@@ -87,8 +86,8 @@ with col1:
                         water_qty = round(random.uniform(40.0, 200.0), 2)
                         time = f"{random.randint(6,18)}:{random.choice(['00','30'])}:00"
                         conn.execute(text("""
-                          INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
-                          VALUES (:scheme_id, :jalmitra, :reading, :reading_date, :reading_time, :water_quantity)
+                            INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
+                            VALUES (:scheme_id, :jalmitra, :reading, :reading_date, :reading_time, :water_quantity)
                         """), {
                             "scheme_id": row["id"],
                             "jalmitra": jalmitra,
@@ -113,48 +112,22 @@ role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engi
 
 if role == "Section Officer":
     st.header("Section Officer Dashboard")
-    so_name = "SO‑Guwahati"
+    so_name = "SO-Guwahati"
 
     # Fetch schemes
     with engine.connect() as conn:
         schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name=:so"), conn, params={"so": so_name})
 
-    # --- Pie Charts Row ---
-    st.subheader("📊 Overview")
-    chart_col1, chart_col2 = st.columns([1,1])
-
-    # Pie 1: Functional vs Non‑Functional Schemes
+    # --- Enlarged Pie Chart (Functional vs Non-Functional Schemes) ---
+    st.subheader("📊 Scheme Functionality Overview")
     func_counts = schemes['functionality'].value_counts()
-    fig1, ax1 = plt.subplots(figsize=(2, 2))  # very small
-    ax1.pie(func_counts, labels=None, autopct='%1.0f%%', startangle=90,
-            colors=['#4CAF50', '#F44336'])
-    ax1.set_title("Scheme Functionality", fontsize=9)
+    fig1, ax1 = plt.subplots(figsize=(8, 8))  # Enlarged chart
+    ax1.pie(func_counts, labels=None, autopct='%1.0f%%', startangle=90, colors=['#4CAF50','#F44336'])
+    ax1.set_title("Functional vs Non-Functional Schemes", fontsize=16)
     plt.tight_layout()
-    buf1 = BytesIO()
-    fig1.savefig(buf1, format="png", dpi=100, bbox_inches='tight', pad_inches=0.1)
-    buf1.seek(0)
-
-    # Pie 2: Jalmitra Updates vs Absentees (initial state)
-    all_jalmitras = [f"JM‑{i+1}" for i in range(20)]
-    updated_jalmitras = []
-    absent_jalmitras = list(set(all_jalmitras) - set(updated_jalmitras))
-    counts = [len(updated_jalmitras), len(absent_jalmitras)]
-    fig2, ax2 = plt.subplots(figsize=(2, 2))
-    ax2.pie(counts, labels=None, autopct='%1.0f%%', startangle=90,
-            colors=['#2196F3', '#FF9800'])
-    ax2.set_title("Jalmitras Status", fontsize=9)
-    plt.tight_layout()
-    buf2 = BytesIO()
-    fig2.savefig(buf2, format="png", dpi=100, bbox_inches='tight', pad_inches=0.1)
-    buf2.seek(0)
-
-    with chart_col1:
-        st.image(buf1, width=100)  # set width to ~100px for compact view
-    with chart_col2:
-        st.image(buf2, width=100)
+    st.pyplot(fig1)
 
     st.markdown("---")
-
     st.subheader("All Schemes under SO")
     st.dataframe(schemes)
 
@@ -172,26 +145,14 @@ if role == "Section Officer":
             FROM bfm_readings b
             JOIN schemes s ON b.scheme_id = s.id
             WHERE b.reading_date = :today
-              AND s.functionality='Functional'
-              AND s.so_name=:so
+            AND s.functionality='Functional'
+            AND s.so_name=:so
         """), conn, params={"today": today, "so": so_name})
 
     st.subheader("BFM Readings by Jalmitras Today")
     st.write(f"Total readings recorded today: {len(readings_today)}")
     if not readings_today.empty:
         st.dataframe(readings_today)
-        # update pie chart for Jalmitra updates
-        updated_jalmitras = readings_today['jalmitra'].unique().tolist()
-        absent_jalmitras = list(set(all_jalmitras) - set(updated_jalmitras))
-        fig2_upd, ax2_upd = plt.subplots(figsize=(2, 2))
-        ax2_upd.pie([len(updated_jalmitras), len(absent_jalmitras)], labels=None, autopct='%1.0f%%',
-                    startangle=90, colors=['#2196F3', '#FF9800'])
-        ax2_upd.set_title("Jalmitras Status", fontsize=9)
-        plt.tight_layout()
-        buf2_upd = BytesIO()
-        fig2_upd.savefig(buf2_upd, format="png", dpi=100, bbox_inches='tight', pad_inches=0.1)
-        buf2_upd.seek(0)
-        chart_col2.image(buf2_upd, width=100)
     else:
         st.info("No readings recorded today.")
 
@@ -203,11 +164,11 @@ if role == "Section Officer":
         st.dataframe(quantity_matrix)
 
     # --- Absent Jalmitras per scheme ---
+    all_jalmitras = [f"JM-{i+1}" for i in range(20)]
     absent_list = []
     for j in all_jalmitras:
         for s_name in functional_schemes["scheme_name"]:
-            if readings_today.empty or not ((readings_today["jalmitra"] == j) &
-                                            (readings_today["scheme_name"] == s_name)).any():
+            if readings_today.empty or not ((readings_today["jalmitra"] == j) & (readings_today["scheme_name"] == s_name)).any():
                 absent_list.append({"jalmitra": j, "scheme_name": s_name})
     absent_df = pd.DataFrame(absent_list)
     st.subheader("Absent Readings by Jalmitras")
@@ -221,8 +182,8 @@ if role == "Section Officer":
             FROM bfm_readings b
             JOIN schemes s ON b.scheme_id = s.id
             WHERE b.reading_date BETWEEN :week_ago AND :today
-              AND s.so_name = :so
-              AND s.functionality = 'Functional'
+            AND s.so_name = :so
+            AND s.functionality = 'Functional'
             GROUP BY s.scheme_name, b.reading_date
         """), conn, params={"week_ago": week_ago, "today": today, "so": so_name})
 

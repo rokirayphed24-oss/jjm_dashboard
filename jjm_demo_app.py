@@ -5,8 +5,8 @@
 # - Demo data generator & remover
 # - Functional/Non-functional schemes
 # - BFM readings & water quantity per Jalmitra
-# - Last 7 days water supplied chart
-# - Pie charts for scheme functionality and Jalmitra updates
+# - Last 7 days water supplied graph
+# - Compact pie charts for schemes and Jalmitras
 
 import streamlit as st
 import pandas as pd
@@ -126,11 +126,12 @@ if role == "Section Officer":
     st.subheader("Functional Schemes under SO")
     st.dataframe(functional_schemes)
 
-    # --- Pie chart: Functional vs Non-Functional Schemes ---
+    # --- Tiny Pie chart: Functional vs Non-Functional Schemes ---
     func_counts = schemes['functionality'].value_counts()
-    fig1, ax1 = plt.subplots(figsize=(4, 4))  # smaller figure
-    ax1.pie(func_counts, labels=func_counts.index, autopct='%1.1f%%', startangle=90, colors=['#4CAF50','#F44336'])
-    ax1.set_title("Scheme Functionality Distribution", fontsize=10)
+    fig1, ax1 = plt.subplots(figsize=(2.5, 2.5))  # tiny figure
+    ax1.pie(func_counts, labels=None, autopct='%1.0f%%', startangle=90, colors=['#4CAF50','#F44336'])
+    ax1.set_title("Scheme Functionality", fontsize=10)
+    plt.tight_layout()
     st.pyplot(fig1)
 
     today = datetime.date.today().isoformat()
@@ -153,16 +154,17 @@ if role == "Section Officer":
     else:
         st.info("No readings recorded today.")
 
-    # --- Pie chart: Jalmitra Updates vs Absentees ---
+    # --- Tiny Pie chart: Jalmitra Updates vs Absentees ---
     all_jalmitras = [f"JM-{i+1}" for i in range(20)]
     updated_jalmitras = readings_today['jalmitra'].unique().tolist() if not readings_today.empty else []
     absent_jalmitras = list(set(all_jalmitras) - set(updated_jalmitras))
     counts = [len(updated_jalmitras), len(absent_jalmitras)]
-    labels = ["Updated", "Absent"]
     colors = ['#2196F3','#FF9800']
-    fig2, ax2 = plt.subplots(figsize=(4, 4))  # smaller figure
-    ax2.pie(counts, labels=labels, autopct='%1.1f%%', startangle=90, colors=colors)
-    ax2.set_title("Jalmitra Updates vs Absentees", fontsize=10)
+
+    fig2, ax2 = plt.subplots(figsize=(2.5, 2.5))  # tiny figure
+    ax2.pie(counts, labels=None, autopct='%1.0f%%', startangle=90, colors=colors)
+    ax2.set_title("Jalmitras Status", fontsize=10)
+    plt.tight_layout()
     st.pyplot(fig2)
 
     # --- Water quantity matrix ---

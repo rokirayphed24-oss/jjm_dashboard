@@ -3,10 +3,10 @@
 # Features:
 # - Landing page with role selection
 # - Demo data generator & remover
-# - Functional/Non-functional schemes
+# - Functional/non-functional schemes
 # - BFM readings & water quantity per Jalmitra
 # - Last 7 days water supplied graph
-# - Compact pie charts for schemes and Jalmitras
+# - Compact side-by-side pie charts for schemes and Jalmitras
 
 import streamlit as st
 import pandas as pd
@@ -118,21 +118,41 @@ if role == "Section Officer":
     with engine.connect() as conn:
         schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name=:so"), conn, params={"so": so_name})
 
-    st.subheader("All Schemes under SO")
-    st.dataframe(schemes)
+    # --- Side-by-Side Pie Charts ---
+    st.subheader("📊 Overview")
+    col_chart1, col_chart2 = st.columns(2)
 
-    # Functional schemes
-    functional_schemes = schemes[schemes['functionality'] == "Functional"]
-    st.subheader("Functional Schemes under SO")
-    st.dataframe(functional_schemes)
-
-    # --- Tiny Pie chart: Functional vs Non-Functional Schemes ---
+    # Functional vs Non-Functional Schemes
     func_counts = schemes['functionality'].value_counts()
-    fig1, ax1 = plt.subplots(figsize=(2.5, 2.5))  # tiny figure
+    fig1, ax1 = plt.subplots(figsize=(2.5, 2.5))
     ax1.pie(func_counts, labels=None, autopct='%1.0f%%', startangle=90, colors=['#4CAF50','#F44336'])
     ax1.set_title("Scheme Functionality", fontsize=10)
     plt.tight_layout()
-    st.pyplot(fig1)
+
+    # Jalmitras Updates vs Absentees (initially empty)
+    all_jalmitras = [f"JM-{i+1}" for i in range(20)]
+    updated_jalmitras = []
+    absent_jalmitras = list(set(all_jalmitras) - set(updated_jalmitras))
+    counts = [len(updated_jalmitras), len(absent_jalmitras)]
+    colors = ['#2196F3','#FF9800']
+    fig2, ax2 = plt.subplots(figsize=(2.5, 2.5))
+    ax2.pie(counts, labels=None, autopct='%1.0f%%', startangle=90, colors=colors)
+    ax2.set_title("Jalmitras Status", fontsize=10)
+    plt.tight_layout()
+
+    with col_chart1:
+        st.pyplot(fig1)
+    with col_chart2:
+        st.pyplot(fig2)
+
+    st.markdown("---")
+    st.subheader("All Schemes under SO")
+    st.dataframe(schemes)
+
+    # Functional schemes table
+    functional_schemes = schemes[schemes['functionality'] == "Functional"]
+    st.subheader("Functional Schemes under SO")
+    st.dataframe(functional_schemes)
 
     today = datetime.date.today().isoformat()
 
@@ -151,25 +171,22 @@ if role == "Section Officer":
     st.write(f"Total readings recorded today: {len(readings_today)}")
     if not readings_today.empty:
         st.dataframe(readings_today)
+        updated_jalmitras = readings_today['jalmitra'].unique().tolist()
+        absent_jalmitras = list(set(all_jalmitras) - set(updated_jalmitras))
+        # Update pie chart dynamically
+        fig2, ax2 = plt.subplots(figsize=(2.5, 2.5))
+        ax2.pie([len(updated_jalmitras), len(absent_jalmitras)], labels=None, autopct='%1.0f%%',
+                startangle=90, colors=['#2196F3','#FF9800'])
+        ax2.set_title("Jalmitras Status", fontsize=10)
+        plt.tight_layout()
+        col_chart2.pyplot(fig2)
     else:
         st.info("No readings recorded today.")
 
-    # --- Tiny Pie chart: Jalmitra Updates vs Absentees ---
-    all_jalmitras = [f"JM-{i+1}" for i in range(20)]
-    updated_jalmitras = readings_today['jalmitra'].unique().tolist() if not readings_today.empty else []
-    absent_jalmitras = list(set(all_jalmitras) - set(updated_jalmitras))
-    counts = [len(updated_jalmitras), len(absent_jalmitras)]
-    colors = ['#2196F3','#FF9800']
-
-    fig2, ax2 = plt.subplots(figsize=(2.5, 2.5))  # tiny figure
-    ax2.pie(counts, labels=None, autopct='%1.0f%%', startangle=90, colors=colors)
-    ax2.set_title("Jalmitras Status", fontsize=10)
-    plt.tight_layout()
-    st.pyplot(fig2)
-
     # --- Water quantity matrix ---
     if not readings_today.empty:
-        quantity_matrix = readings_today.pivot_table(index="jalmitra", columns="scheme_name", values="water_quantity", aggfunc="sum").fillna(0)
+        quantity_matrix = readings_today.pivot_table(index="jalmitra", columns="scheme_name",
+                                                     values="water_quantity", aggfunc="sum").fillna(0)
         st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra per Scheme")
         st.dataframe(quantity_matrix)
 

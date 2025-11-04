@@ -16,6 +16,15 @@ st.markdown("---")
 DB_FILE = "jjm_demo.sqlite"
 engine = create_engine(f"sqlite:///{DB_FILE}", connect_args={"check_same_thread": False})
 
+# Temporary patch: rename 'functional' column to 'functionality' if exists
+with engine.connect() as conn:
+    try:
+        conn.execute(text("ALTER TABLE schemes RENAME COLUMN functional TO functionality"))
+        conn.commit()
+    except Exception:
+        pass  # ignore if already renamed
+
+
 # Create tables if not exist
 with engine.connect() as conn:
     conn.execute(text("""
@@ -172,3 +181,4 @@ if role == "Section Officer":
         st.line_chart(pivot_chart)
     else:
         st.info("No readings for the past 7 days.")
+

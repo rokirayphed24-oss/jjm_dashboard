@@ -4,9 +4,9 @@
 # - Landing page with role selection
 # - Demo data generator & remover
 # - Functional/non-functional schemes
-# - BFM readings & water quantity per Jalmitra
+# - BFM readings & water quantity per Jalmitra (flat table)
 # - Last 7 days water supplied graph
-# - Compact side-by-side pie chart for schemes
+# - Compact pie chart for schemes
 
 import streamlit as st
 import pandas as pd
@@ -160,12 +160,11 @@ if role == "Section Officer":
         else:
             st.info("No readings recorded today.")
 
-        # --- Water quantity matrix ---
+        # --- Water quantity table (flat, only each Jalmitra vs his scheme) ---
         if not readings_today.empty:
-            quantity_matrix = readings_today.pivot_table(index="jalmitra", columns="scheme_name",
-                                                         values="water_quantity", aggfunc="sum").fillna(0)
-            st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra per Scheme")
-            st.dataframe(quantity_matrix)
+            water_qty_table = readings_today[["jalmitra", "scheme_name", "water_quantity"]].copy()
+            st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra")
+            st.dataframe(water_qty_table)
 
         # --- Absent Jalmitras per scheme ---
         all_jalmitras = [f"JM-{i+1}" for i in range(20)]

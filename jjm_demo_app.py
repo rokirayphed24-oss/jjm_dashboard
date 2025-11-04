@@ -6,7 +6,7 @@
 # - Functional/non-functional schemes
 # - BFM readings & water quantity per Jalmitra
 # - Last 7 days water supplied graph
-# - Enlarged pie chart for schemes functionality
+# - Compact pie chart for schemes functionality
 
 import streamlit as st
 import pandas as pd
@@ -118,12 +118,12 @@ if role == "Section Officer":
     with engine.connect() as conn:
         schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name=:so"), conn, params={"so": so_name})
 
-    # --- Enlarged Pie Chart (Functional vs Non-Functional Schemes) ---
+    # --- Compact Pie Chart for Functional vs Non-Functional Schemes ---
     st.subheader("📊 Scheme Functionality Overview")
     func_counts = schemes['functionality'].value_counts()
-    fig1, ax1 = plt.subplots(figsize=(8, 8))  # Enlarged chart
+    fig1, ax1 = plt.subplots(figsize=(4, 4))  # Compact size
     ax1.pie(func_counts, labels=None, autopct='%1.0f%%', startangle=90, colors=['#4CAF50','#F44336'])
-    ax1.set_title("Functional vs Non-Functional Schemes", fontsize=16)
+    ax1.set_title("Functional vs Non-Functional Schemes", fontsize=12)
     plt.tight_layout()
     st.pyplot(fig1)
 

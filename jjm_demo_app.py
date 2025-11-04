@@ -6,6 +6,7 @@
 # - Functional/Non-functional schemes
 # - BFM readings & water quantity per Jalmitra
 # - Last 7 days water supplied chart
+# - Pie charts for scheme functionality and Jalmitra updates
 
 import streamlit as st
 import pandas as pd
@@ -13,6 +14,7 @@ import numpy as np
 import datetime
 import random
 from sqlalchemy import create_engine, text
+import matplotlib.pyplot as plt
 
 # --- Page Config ---
 st.set_page_config(page_title="JJM Role Dashboard", layout="wide")
@@ -110,8 +112,9 @@ role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engi
 
 if role == "Section Officer":
     st.header("Section Officer Dashboard")
-
     so_name = "SO-Guwahati"
+
+    # Fetch schemes
     with engine.connect() as conn:
         schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name=:so"), conn, params={"so": so_name})
 
@@ -123,9 +126,16 @@ if role == "Section Officer":
     st.subheader("Functional Schemes under SO")
     st.dataframe(functional_schemes)
 
+    # --- Pie chart: Functional vs Non-Functional Schemes ---
+    func_counts = schemes['functionality'].value_counts()
+    fig1, ax1 = plt.subplots()
+    ax1.pie(func_counts, labels=func_counts.index, autopct='%1.1f%%', startangle=90, colors=['#4CAF50','#F44336'])
+    ax1.set_title("Scheme Functionality Distribution")
+    st.pyplot(fig1)
+
     today = datetime.date.today().isoformat()
 
-    # --- Today's readings (Functional schemes only) ---
+    # --- Today's readings (Functional only) ---
     with engine.connect() as conn:
         readings_today = pd.read_sql(text("""
             SELECT s.scheme_name, b.jalmitra, b.reading, b.reading_time, b.water_quantity
@@ -143,16 +153,25 @@ if role == "Section Officer":
     else:
         st.info("No readings recorded today.")
 
+    # --- Pie chart: Jalmitra Updates vs Absentees ---
+    all_jalmitras = [f"JM-{i+1}" for i in range(20)]
+    updated_jalmitras = readings_today['jalmitra'].unique().tolist() if not readings_today.empty else []
+    absent_jalmitras = list(set(all_jalmitras) - set(updated_jalmitras))
+    counts = [len(updated_jalmitras), len(absent_jalmitras)]
+    labels = ["Updated", "Absent"]
+    colors = ['#2196F3','#FF9800']
+    fig2, ax2 = plt.subplots()
+    ax2.pie(counts, labels=labels, autopct='%1.1f%%', startangle=90, colors=colors)
+    ax2.set_title("Jalmitra Updates vs Absentees")
+    st.pyplot(fig2)
+
     # --- Water quantity matrix ---
     if not readings_today.empty:
         quantity_matrix = readings_today.pivot_table(index="jalmitra", columns="scheme_name", values="water_quantity", aggfunc="sum").fillna(0)
         st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra per Scheme")
         st.dataframe(quantity_matrix)
-    else:
-        st.info("No water quantity data available.")
 
-    # --- Absent Jalmitras ---
-    all_jalmitras = [f"JM-{i+1}" for i in range(20)]
+    # --- Absent Jalmitras per scheme ---
     absent_list = []
     for j in all_jalmitras:
         for s_name in functional_schemes["scheme_name"]:

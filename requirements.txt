@@ -5,4 +5,7 @@ sqlalchemy
 opencv-python-headless
 pytesseract
 Pillow
+matplotlib
+
+
 

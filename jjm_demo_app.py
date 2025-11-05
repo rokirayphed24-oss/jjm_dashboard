@@ -1,12 +1,12 @@
 # jjm_demo_app.py
-# Streamlit dashboard for Jal Jeevan Mission — SO Role
+# Streamlit Dashboard for Jal Jeevan Mission — Section Officer Role
 # Features:
 # - Landing page with role selection
-# - Demo data generator & remover
+# - Demo data generator and remover
 # - Functional/non-functional schemes
-# - BFM readings & water quantity per Jalmitra (flat table)
-# - Last 7 days water supplied graph
-# - Compact pie chart for schemes
+# - BFM readings & water quantity per Jalmitra
+# - Last 7 days water supply trends
+# - Compact pie chart and summary tables
 
 import streamlit as st
 import pandas as pd
@@ -26,26 +26,30 @@ st.markdown("---")
 DB_FILE = "jjm_demo.sqlite"
 engine = create_engine(f"sqlite:///{DB_FILE}", connect_args={"check_same_thread": False})
 
-# Create tables if not exist
-with engine.connect() as conn:
+# --- Create tables if not exist ---
+with engine.begin() as conn:
+    # Schemes table
     conn.execute(text("""
-    CREATE TABLE IF NOT EXISTS schemes (
-        scheme_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        scheme_name TEXT,
-        functionality TEXT,
-        so_name TEXT
-    )
+        CREATE TABLE IF NOT EXISTS schemes (
+            scheme_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scheme_name TEXT,
+            functionality TEXT,
+            so_name TEXT
+        )
     """))
+    
+    # BFM readings table
     conn.execute(text("""
-    CREATE TABLE IF NOT EXISTS bfm_readings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        scheme_id INTEGER,
-        jalmitra TEXT,
-        reading INTEGER,
-        reading_date TEXT,
-        reading_time TEXT,
-        water_quantity REAL
-    )
+        CREATE TABLE IF NOT EXISTS bfm_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scheme_id INTEGER,
+            jalmitra TEXT,
+            reading INTEGER,
+            reading_date TEXT,
+            reading_time TEXT,
+            water_quantity REAL,
+            FOREIGN KEY (scheme_id) REFERENCES schemes (scheme_id)
+        )
     """))
 
 # --- Demo Data Generator / Remover ---
@@ -60,11 +64,11 @@ with col1:
 
         with engine.begin() as conn:
             # Clear old data
-            conn.execute(text("DELETE FROM schemes"))
             conn.execute(text("DELETE FROM bfm_readings"))
+            conn.execute(text("DELETE FROM schemes"))
 
             # Insert schemes
-            for i, scheme in enumerate(schemes_list):
+            for scheme in schemes_list:
                 functionality = random.choice(["Functional", "Non-Functional"])
                 conn.execute(text("""
                     INSERT INTO schemes (scheme_name, functionality, so_name)
@@ -89,7 +93,7 @@ with col1:
                             INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
                             VALUES (:scheme_id, :jalmitra, :reading, :reading_date, :reading_time, :water_quantity)
                         """), {
-                            "scheme_id": row["id"],
+                            "scheme_id": row["scheme_id"],
                             "jalmitra": jalmitra,
                             "reading": reading,
                             "reading_date": date,
@@ -101,8 +105,8 @@ with col1:
 with col2:
     if st.button("Remove Demo Data"):
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM schemes"))
             conn.execute(text("DELETE FROM bfm_readings"))
+            conn.execute(text("DELETE FROM schemes"))
         st.warning("🗑️ All demo data removed successfully!")
 
 st.markdown("---")
@@ -110,6 +114,9 @@ st.markdown("---")
 # --- Role Selection ---
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
 
+# =========================
+# Section Officer Dashboard
+# =========================
 if role == "Section Officer":
     st.header("Section Officer Dashboard")
     so_name = "SO-Guwahati"
@@ -119,13 +126,13 @@ if role == "Section Officer":
         schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name=:so"), conn, params={"so": so_name})
 
     if not schemes.empty:
-        # --- Side-by-side: Pie Chart + All Schemes Table ---
+        # --- Pie Chart + Table ---
         st.subheader("📊 Scheme Functionality Overview")
-        col_chart, col_table = st.columns([1,3])
+        col_chart, col_table = st.columns([1, 3])
 
         func_counts = schemes['functionality'].value_counts()
-        fig1, ax1 = plt.subplots(figsize=(4,4))  # Compact size
-        ax1.pie(func_counts, labels=None, autopct='%1.0f%%', startangle=90, colors=['#4CAF50','#F44336'])
+        fig1, ax1 = plt.subplots(figsize=(4, 4))
+        ax1.pie(func_counts, autopct='%1.0f%%', startangle=90, colors=['#4CAF50', '#F44336'])
         ax1.set_title("Functional vs Non-Functional", fontsize=12)
         plt.tight_layout()
 
@@ -135,38 +142,39 @@ if role == "Section Officer":
         with col_table:
             st.dataframe(schemes)
 
-        # Functional schemes table
+        # Functional schemes
         functional_schemes = schemes[schemes['functionality'] == "Functional"]
         st.subheader("Functional Schemes under SO")
         st.dataframe(functional_schemes)
 
         today = datetime.date.today().isoformat()
 
-        # --- Today's readings (Functional only) ---
+        # --- Today's readings ---
         with engine.connect() as conn:
             readings_today = pd.read_sql(text("""
                 SELECT s.scheme_name, b.jalmitra, b.reading, b.reading_time, b.water_quantity
                 FROM bfm_readings b
-                JOIN schemes s ON b.scheme_id = s.id
+                JOIN schemes s ON b.scheme_id = s.scheme_id
                 WHERE b.reading_date = :today
-                AND s.functionality='Functional'
-                AND s.so_name=:so
+                AND s.functionality = 'Functional'
+                AND s.so_name = :so
             """), conn, params={"today": today, "so": so_name})
 
-        st.subheader("BFM Readings by Jalmitras Today")
+        st.subheader("📅 BFM Readings by Jalmitras Today")
         st.write(f"Total readings recorded today: {len(readings_today)}")
+
         if not readings_today.empty:
             st.dataframe(readings_today)
         else:
             st.info("No readings recorded today.")
 
-        # --- Water quantity table (flat, only each Jalmitra vs his scheme) ---
+        # --- Water quantity per Jalmitra ---
         if not readings_today.empty:
             water_qty_table = readings_today[["jalmitra", "scheme_name", "water_quantity"]].copy()
             st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra")
             st.dataframe(water_qty_table)
 
-        # --- Absent Jalmitras per scheme ---
+        # --- Absent Jalmitras ---
         all_jalmitras = [f"JM-{i+1}" for i in range(20)]
         absent_list = []
         for j in all_jalmitras:
@@ -174,16 +182,16 @@ if role == "Section Officer":
                 if readings_today.empty or not ((readings_today["jalmitra"] == j) & (readings_today["scheme_name"] == s_name)).any():
                     absent_list.append({"jalmitra": j, "scheme_name": s_name})
         absent_df = pd.DataFrame(absent_list)
-        st.subheader("Absent Readings by Jalmitras")
+        st.subheader("🚫 Absent Readings by Jalmitras")
         st.dataframe(absent_df)
 
-        # --- Last 7 Days — Water Quantity Graph ---
+        # --- Last 7 Days Water Quantity ---
         week_ago = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
         with engine.connect() as conn:
             last_week_qty = pd.read_sql(text("""
                 SELECT s.scheme_name, b.reading_date, SUM(b.water_quantity) AS total_water_m3
                 FROM bfm_readings b
-                JOIN schemes s ON b.scheme_id = s.id
+                JOIN schemes s ON b.scheme_id = s.scheme_id
                 WHERE b.reading_date BETWEEN :week_ago AND :today
                 AND s.so_name = :so
                 AND s.functionality = 'Functional'
@@ -196,5 +204,6 @@ if role == "Section Officer":
             st.line_chart(pivot_chart)
         else:
             st.info("No data found for the past 7 days.")
-
+    else:
+        st.info("No schemes found for this Section Officer.")
 

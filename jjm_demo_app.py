@@ -38,7 +38,7 @@ with engine.connect() as conn:
     """))
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS bfm_readings (
-        scheme_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         scheme_id INTEGER,
         jalmitra TEXT,
         reading INTEGER,
@@ -196,4 +196,5 @@ if role == "Section Officer":
             st.line_chart(pivot_chart)
         else:
             st.info("No data found for the past 7 days.")
+
 

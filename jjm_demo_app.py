@@ -1,12 +1,8 @@
 # jjm_demo_app.py
-# JJM Dashboard — Full version (fixed scheme name in "BFM Readings Updated Today")
-# Features:
-# - Demo data generator (SO = ROKI RAY) with Assamese Jalmitras
-# - Scheme functionality & Jalmitra updates pies
-# - Styled Top (green) and Worst (red) tables (last 7 days)
-# - Clickable "View" per Jalmitra to show 7-day performance chart
-# - "📅 BFM Readings Updated Today" table (shows scheme name correctly)
-# - CSV export buttons
+# JJM Dashboard — Full (fixed Pandas Styler BFM-format error)
+# - Styled Top/Worst tables
+# - Clickable "View" per Jalmitra (7-day chart)
+# - "📅 BFM Readings Updated Today" with Scheme Name and safe formatting
 
 import streamlit as st
 import pandas as pd
@@ -15,19 +11,18 @@ import random
 import plotly.express as px
 from typing import Tuple
 
-# ---------------------------  Page setup  ---------------------------
+# --------------------------- Page setup ---------------------------
 st.set_page_config(page_title="JJM Dashboard — Full", layout="wide")
 st.title("Jal Jeevan Mission — Unified Dashboard")
 st.markdown("For Section Officer **ROKI RAY** — Jalmitra performance, daily updates, and readings.")
 st.markdown("---")
 
-# ---------------------------  Helpers  ---------------------------
+# --------------------------- Helpers ---------------------------
 def ensure_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     if df is None:
         df = pd.DataFrame(columns=cols)
     for c in cols:
         if c not in df.columns:
-            # sensible defaults
             if c in ("id", "scheme_id", "reading"):
                 df[c] = 0
             elif c == "water_quantity":
@@ -48,7 +43,7 @@ def init_state():
 
 init_state()
 
-# ---------------------------  Demo data generator  ---------------------------
+# --------------------------- Demo data generator ---------------------------
 def reset_session_data():
     st.session_state["schemes"] = pd.DataFrame(columns=["id","scheme_name","functionality","so_name"])
     st.session_state["readings"] = pd.DataFrame(columns=[
@@ -113,24 +108,23 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
     st.session_state["demo_generated"] = True
     st.success("✅ Demo data generated for ROKI RAY.")
 
-# ---------------------------  Compute metrics  ---------------------------
+# --------------------------- Compute metrics ---------------------------
 @st.cache_data
 def compute_metrics(readings, schemes, so, start, end):
     r = ensure_columns(readings.copy(), ["id","scheme_id","jalmitra","reading","reading_date","reading_time","water_quantity","scheme_name"])
     s = ensure_columns(schemes.copy(), ["id","scheme_name","functionality","so_name"])
+    # merge; keep both reading's scheme_name and scheme table's scheme_name using suffixes
     m = r.merge(s[["id","scheme_name","functionality","so_name"]], left_on="scheme_id", right_on="id", how="left", suffixes=("_reading","_scheme"))
-    # mask for functional & SO & date range
     mask = (m["functionality"] == "Functional") & (m["so_name"] == so) & (m["reading_date"] >= start) & (m["reading_date"] <= end)
     last7 = m.loc[mask].copy()
     if last7.empty:
         return last7, pd.DataFrame()
     metrics = (last7.groupby("jalmitra")
-               .agg(days_updated=("reading_date", lambda x: x.nunique()),
-                    total_water_m3=("water_quantity", "sum"))
+               .agg(days_updated=("reading_date", lambda x: x.nunique()), total_water_m3=("water_quantity", "sum"))
                .reset_index())
     return last7, metrics
 
-# ---------------------------  Demo data UI  ---------------------------
+# --------------------------- Demo data UI ---------------------------
 st.markdown("### 🧪 Demo Data Management")
 col1, col2 = st.columns([2,1])
 with col1:
@@ -143,7 +137,7 @@ with col2:
         st.warning("🗑️ All data removed.")
 st.markdown("---")
 
-# ---------------------------  Dashboard  ---------------------------
+# --------------------------- Dashboard ---------------------------
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
 if role != "Section Officer":
     st.header(f"{role} Dashboard — Placeholder")
@@ -160,7 +154,7 @@ if schemes.empty:
     st.info("No schemes found. Generate demo data first.")
     st.stop()
 
-# ---------------------------  Pies  ---------------------------
+# --------------------------- Pies ---------------------------
 func_counts = schemes["functionality"].value_counts()
 today_iso = today.isoformat()
 
@@ -178,9 +172,9 @@ today_upd = merged_all[
 
 # create a display scheme name column: prefer reading's scheme_name if non-empty, else fallback to scheme table name
 def pick_scheme_display(row):
-    # prefer reading-level scheme_name if present and non-empty
     val_reading = row.get("scheme_name_reading", None)
     val_scheme = row.get("scheme_name_scheme", None)
+    # prefer reading-level value
     if pd.notna(val_reading) and str(val_reading).strip() != "":
         return val_reading
     if pd.notna(val_scheme) and str(val_scheme).strip() != "":
@@ -188,16 +182,11 @@ def pick_scheme_display(row):
     return ""
 
 if not today_upd.empty:
-    # ensure both possible columns exist due to suffixing
+    # If merge produced different naming, normalize columns
     if "scheme_name_reading" not in today_upd.columns and "scheme_name" in today_upd.columns:
-        # when suffixes weren't applied, the original column might be named 'scheme_name'
         today_upd["scheme_name_reading"] = today_upd["scheme_name"]
-    # rename scheme_name from schemes table if exists (from merge suffix)
-    if "scheme_name" in today_upd.columns and "scheme_name_scheme" not in today_upd.columns:
-        # try to copy into scheme_name_scheme if merge created that
-        today_upd["scheme_name_scheme"] = today_upd.get("scheme_name", "")
-
-    # Compose scheme_display
+    if "scheme_name_scheme" not in today_upd.columns and "scheme_name" in today_upd.columns:
+        today_upd["scheme_name_scheme"] = today_upd["scheme_name"]
     today_upd["Scheme Display"] = today_upd.apply(pick_scheme_display, axis=1)
 
 # compute updated/absent counts for pie
@@ -212,6 +201,7 @@ with col1:
                   color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"})
     fig1.update_traces(textinfo='percent+label')
     st.plotly_chart(fig1, use_container_width=True)
+
 with col2:
     st.markdown("#### Jalmitra Updates (Today)")
     df_part = pd.DataFrame({"status":["Updated","Absent"], "count":[updated_count, absent_count]})
@@ -223,7 +213,7 @@ with col2:
 
 st.markdown("---")
 
-# ---------------------------  Top/Worst + View  ---------------------------
+# --------------------------- Top/Worst + View ---------------------------
 start_date = (today - datetime.timedelta(days=6)).isoformat()
 end_date = today_iso
 last7, metrics = compute_metrics(readings, schemes, so, start_date, end_date)
@@ -236,7 +226,7 @@ else:
     metrics = metrics.sort_values(by=["score","total_water_m3"], ascending=False).reset_index(drop=True)
     metrics["Rank"] = metrics.index + 1
 
-    # assign deterministic scheme names (display column) for the metrics table (these are illustrative)
+    # assign deterministic scheme names (display) for metrics table (illustrative)
     villages = ["Rampur","Kahikuchi","Dalgaon","Guwahati","Boko","Moran","Tezpur","Sibsagar","Jorhat","Hajo"]
     rnd = random.Random(42)
     metrics["Scheme Name"] = [rnd.choice(villages) + " PWSS" for _ in range(len(metrics))]
@@ -252,10 +242,10 @@ else:
     col_t, col_w = st.columns([1,1])
     with col_t:
         st.markdown("### 🟢 Top 10 Performing Jalmitras")
-        st.dataframe(top_table.style.format({"Total Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Greens"), height=300)
+        st.dataframe(top_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Greens"), height=300)
     with col_w:
         st.markdown("### 🔴 Worst 10 Performing Jalmitras")
-        st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r"), height=300)
+        st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r"), height=300)
 
     # compact rows with View buttons (preserve styled tables but allow clicks)
     st.markdown("**Tap View to see 7-day chart**")
@@ -290,15 +280,15 @@ else:
                 st.session_state["selected_jalmitra"] = row["Jalmitra"]
         st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode("utf-8"), "worst_10_jalmitras.csv")
 
-# ---------------------------  View chart  ---------------------------
+# --------------------------- View chart ---------------------------
 if st.session_state.get("selected_jalmitra"):
     jm = st.session_state["selected_jalmitra"]
     st.markdown("---")
     st.subheader(f"7-day Performance — {jm}")
-    # ensure last7 exists in scope; recompute if needed
+    # recompute/ensure last7 available
     if 'last7' not in locals() or last7 is None:
         last7, _ = compute_metrics(readings, schemes, so, start_date, end_date)
-    jm_data = last7[last7["jalmitra"] == jm] if not last7.empty else pd.DataFrame()
+    jm_data = last7[last7["jalmitra"] == jm] if (not last7.empty) else pd.DataFrame()
     if jm_data.empty:
         st.info("No readings for this Jalmitra.")
     else:
@@ -312,7 +302,7 @@ if st.session_state.get("selected_jalmitra"):
     if st.button("Close View"):
         st.session_state["selected_jalmitra"] = None
 
-# ---------------------------  NEW — Daily BFM Readings  ---------------------------
+# --------------------------- NEW — Daily BFM Readings ---------------------------
 st.markdown("---")
 st.subheader("📅 BFM Readings Updated Today")
 
@@ -320,24 +310,25 @@ st.subheader("📅 BFM Readings Updated Today")
 if today_upd.empty:
     st.info("No BFM readings recorded today.")
 else:
-    # Ensure reading-time column exists and is string for sorting
-    today_upd = ensure_columns(today_upd.copy(), ["jalmitra","scheme_name_reading","scheme_name_scheme","reading","water_quantity","reading_time","Scheme Display"])
-    # Normalize reading_time to sortable string (if empty, use "00:00:00")
+    # Normalize column names and ensure values exist
+    cols_to_ensure = ["jalmitra", "reading", "water_quantity", "reading_time", "scheme_name_reading", "scheme_name_scheme", "Scheme Display"]
+    today_upd = ensure_columns(today_upd.copy(), cols_to_ensure)
+
+    # Normalize reading_time for sorting - if missing, set to "00:00:00"
     today_upd["reading_time_norm"] = today_upd["reading_time"].astype(str).replace("", "00:00:00")
-    # Sort by jalmitra then reading_time descending to get latest per jalmitra
-    today_upd_sorted = today_upd.sort_values(by=["jalmitra","reading_time_norm"], ascending=[True, False])
+
+    # Sort by jalmitra then reading_time descending so the first per jalmitra is the latest
+    today_upd_sorted = today_upd.sort_values(by=["jalmitra", "reading_time_norm"], ascending=[True, False])
     latest_per_jm = today_upd_sorted.drop_duplicates(subset=["jalmitra"], keep="first").copy()
 
-    # Build display scheme name: prefer 'Scheme Display' if exists, else fallbacks
+    # Resolve scheme name to display: prefer reading-level scheme_name, then merged scheme name
     def scheme_for_row(row):
         sd = row.get("Scheme Display", "")
         if pd.notna(sd) and str(sd).strip() != "":
             return sd
-        # fallback to reading-level name
         s_read = row.get("scheme_name_reading", "")
         if pd.notna(s_read) and str(s_read).strip() != "":
             return s_read
-        # fallback to scheme table name
         s_scheme = row.get("scheme_name_scheme", "")
         if pd.notna(s_scheme) and str(s_scheme).strip() != "":
             return s_scheme
@@ -345,25 +336,34 @@ else:
 
     latest_per_jm["Scheme Name"] = latest_per_jm.apply(scheme_for_row, axis=1)
 
-    # Build the daily table
-    display_cols = ["jalmitra","Scheme Name","reading","water_quantity"]
-    # ensure reading exists as numeric for formatting
+    # Ensure reading numeric and water qty numeric; fill NaNs
     latest_per_jm["reading"] = pd.to_numeric(latest_per_jm["reading"], errors="coerce").fillna(0).astype(int)
-    daily_bfm = latest_per_jm[["jalmitra","Scheme Name","reading","water_quantity"]].copy()
-    daily_bfm.columns = ["Jalmitra","Scheme Name","BFM Reading","Water Quantity (m³)"]
+    latest_per_jm["water_quantity"] = pd.to_numeric(latest_per_jm["water_quantity"], errors="coerce").fillna(0.0)
+
+    # Create display-safe formatted BFM Reading string (zero-padded) to avoid Styler integer formatting issues
+    latest_per_jm["BFM Reading Display"] = latest_per_jm["reading"].apply(lambda x: f"{int(x):06d}")
+
+    # Build the daily table for display
+    daily_bfm = latest_per_jm[["jalmitra", "Scheme Name", "BFM Reading Display", "water_quantity"]].copy()
+    daily_bfm.columns = ["Jalmitra", "Scheme Name", "BFM Reading", "Water Quantity (m³)"]
     daily_bfm = daily_bfm.sort_values("Jalmitra").reset_index(drop=True)
 
-    st.dataframe(
-        daily_bfm.style.format({"BFM Reading":"{:06d}","Water Quantity (m³)":"{:.2f"}).background_gradient(cmap="Blues", subset=["Water Quantity (m³)"]),
-        height=360
-    )
+    # Display: since BFM Reading is already a string formatted, format only Water Quantity
+    sty = daily_bfm.style.format({"Water Quantity (m³)":"{:.2f}"})
+    # apply blue gradient only to the numeric column; Styler expects numeric col for gradient, so create a helper column
+    # we'll temporarily add a numeric copy for gradient and then drop it from display if necessary.
+    # But pandas Styler allows subset selection; gradient will skip non-numeric cells.
+    try:
+        st.dataframe(sty.background_gradient(cmap="Blues", subset=["Water Quantity (m³)"]), height=360)
+    except Exception:
+        # last-resort: render without styling if styler fails
+        st.dataframe(daily_bfm, height=360)
 
-# ---------------------------  Export  ---------------------------
+# --------------------------- Export ---------------------------
 st.markdown("---")
 st.subheader("📤 Export Snapshot")
 st.download_button("Schemes CSV", schemes.to_csv(index=False).encode("utf-8"), "schemes.csv")
 st.download_button("Readings CSV", readings.to_csv(index=False).encode("utf-8"), "readings.csv")
-# metrics may not exist if no data
 try:
     st.download_button("Metrics CSV", metrics.to_csv(index=False).encode("utf-8"), "metrics.csv")
 except Exception:

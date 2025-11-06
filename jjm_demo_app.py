@@ -1,9 +1,8 @@
 # jjm_demo_app.py
-# JJM Dashboard — Full (adds Web View / Phone View toggle)
+# JJM Dashboard — Full (fixes: water_quantity cap to 100 m³, BFM table S.No starts at 1)
 # - Styled Top/Worst tables
 # - Clickable "View" per Jalmitra (7-day chart)
-# - "📅 BFM Readings Updated Today" with Scheme Name and safe formatting
-# - View Mode: "Web View" (desktop) or "Phone View" (stacked/mobile)
+# - "📅 BFM Readings Updated Today" with Scheme Name and safe formatting + S.No
 
 import streamlit as st
 import pandas as pd
@@ -60,6 +59,12 @@ def reset_session_data():
     st.session_state["selected_jalmitra"] = None
 
 def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
+    """
+    Generate demo schemes and readings.
+      - Per-reading water_quantity capped at 100.00 (rounded to 2 decimals).
+      - Reading is 6-digit sample value.
+      - Assigns a scheme_name label per reading (village PWSS).
+    """
     FIXED_UPDATE_PROB = 0.85
     assamese = [
         "Biren","Nagen","Rahul","Vikram","Debojit","Anup","Kamal","Ranjit","Himangshu",
@@ -96,6 +101,8 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
         for d in range(7):
             date_iso = (today - datetime.timedelta(days=d)).isoformat()
             if random.random() < FIXED_UPDATE_PROB:
+                # cap per-reading water quantity to max 100.00 and round to 2 decimals
+                water_qty = round(random.uniform(10.0, 100.0), 2)
                 readings.append({
                     "id": len(readings) + 1,
                     "scheme_id": s["id"],
@@ -103,7 +110,7 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
                     "reading": random.choice(reading_samples),
                     "reading_date": date_iso,
                     "reading_time": f"{random.randint(6,18)}:{random.choice(['00','15','30','45'])}:00",
-                    "water_quantity": round(random.uniform(40.0,350.0),2),
+                    "water_quantity": water_qty,
                     "scheme_name": scheme_label  # store label in reading
                 })
 
@@ -124,9 +131,12 @@ def compute_metrics(readings, schemes, so, start, end):
     last7 = m.loc[mask].copy()
     if last7.empty:
         return last7, pd.DataFrame()
+    # ensure water_quantity numeric and rounded before aggregation
+    last7["water_quantity"] = pd.to_numeric(last7["water_quantity"], errors="coerce").fillna(0.0).round(2)
     metrics = (last7.groupby("jalmitra")
                .agg(days_updated=("reading_date", lambda x: x.nunique()), total_water_m3=("water_quantity", "sum"))
                .reset_index())
+    metrics["total_water_m3"] = metrics["total_water_m3"].round(2)
     return last7, metrics
 
 # --------------------------- Demo data UI ---------------------------
@@ -242,7 +252,9 @@ if last7.empty:
     st.info("No readings in last 7 days.")
 else:
     # compute score and ranking
-    metrics["score"] = 0.5 * (metrics["days_updated"] / 7.0) + 0.5 * (metrics["total_water_m3"] / metrics["total_water_m3"].max())
+    # guard division by zero if max is zero
+    max_total = metrics["total_water_m3"].max() if not metrics["total_water_m3"].empty else 0.0
+    metrics["score"] = 0.5 * (metrics["days_updated"] / 7.0) + (0.5 * (metrics["total_water_m3"] / max_total) if max_total > 0 else 0.0)
     metrics = metrics.sort_values(by=["score","total_water_m3"], ascending=False).reset_index(drop=True)
     metrics["Rank"] = metrics.index + 1
 
@@ -275,8 +287,12 @@ else:
             st.markdown("Top 10 — Actions")
             for i, row in top_table.reset_index(drop=True).iterrows():
                 c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.4,2.2,1.2,1.2,0.9,0.9])
-                c0.write(row["Rank"]); c1.write(row["Jalmitra"]); c2.write(row["Scheme Name"])
-                c3.write(row["Days Updated (last 7d)"]); c4.write(f"{row['Total Water (m³)']:,}"); c5.write(f"{row['Score']:.3f}")
+                c0.write(row["Rank"])
+                c1.write(row["Jalmitra"])
+                c2.write(row["Scheme Name"])
+                c3.write(row["Days Updated (last 7d)"])
+                c4.write(f"{row['Total Water (m³)']:,}")
+                c5.write(f"{row['Score']:.3f}")
                 btn_key = f"view_top_{i}_{row['Jalmitra']}"
                 if c6.button("View", key=btn_key):
                     st.session_state["selected_jalmitra"] = row["Jalmitra"]
@@ -286,8 +302,12 @@ else:
             st.markdown("Worst 10 — Actions")
             for i, row in worst_table.reset_index(drop=True).iterrows():
                 c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.4,2.2,1.2,1.2,0.9,0.9])
-                c0.write(row["Rank"]); c1.write(row["Jalmitra"]); c2.write(row["Scheme Name"])
-                c3.write(row["Days Updated (last 7d)"]); c4.write(f"{row['Total Water (m³)']:,}"); c5.write(f"{row['Score']:.3f}")
+                c0.write(row["Rank"])
+                c1.write(row["Jalmitra"])
+                c2.write(row["Scheme Name"])
+                c3.write(row["Days Updated (last 7d)"])
+                c4.write(f"{row['Total Water (m³)']:,}")
+                c5.write(f"{row['Score']:.3f}")
                 btn_key = f"view_worst_{i}_{row['Jalmitra']}"
                 if c6.button("View", key=btn_key):
                     st.session_state["selected_jalmitra"] = row["Jalmitra"]
@@ -302,7 +322,8 @@ else:
             cols = st.columns([1.2, 2.6, 1.2])
             cols[0].write(f"#{int(row['Rank'])} {row['Jalmitra']}")
             cols[1].write(row["Scheme Name"])
-            cols[2].button("View", key=f"p_view_top_{i}_{row['Jalmitra']}") and st.session_state.update({"selected_jalmitra": row["Jalmitra"]})
+            if cols[2].button("View", key=f"p_view_top_{i}_{row['Jalmitra']}"):
+                st.session_state["selected_jalmitra"] = row["Jalmitra"]
 
         st.markdown("### 🔴 Worst 10 Performing Jalmitras")
         st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r"), height=360)
@@ -311,7 +332,8 @@ else:
             cols = st.columns([1.2, 2.6, 1.2])
             cols[0].write(f"#{int(row['Rank'])} {row['Jalmitra']}")
             cols[1].write(row["Scheme Name"])
-            cols[2].button("View", key=f"p_view_worst_{i}_{row['Jalmitra']}") and st.session_state.update({"selected_jalmitra": row["Jalmitra"]})
+            if cols[2].button("View", key=f"p_view_worst_{i}_{row['Jalmitra']}"):
+                st.session_state["selected_jalmitra"] = row["Jalmitra"]
 
 # --------------------------- View chart ---------------------------
 if st.session_state.get("selected_jalmitra"):
@@ -327,6 +349,7 @@ if st.session_state.get("selected_jalmitra"):
     else:
         dates = [(today - datetime.timedelta(days=d)).isoformat() for d in reversed(range(7))]
         daily = jm_data.groupby("reading_date")["water_quantity"].sum().reindex(dates, fill_value=0).reset_index()
+        daily["water_quantity"] = daily["water_quantity"].round(2)
         fig = px.bar(daily, x="reading_date", y="water_quantity",
                      labels={"reading_date":"Date","water_quantity":"Water (m³)"},
                      title=f"{jm} — Daily Water Supplied (Last 7 Days)")
@@ -372,9 +395,9 @@ else:
 
     latest_per_jm["Scheme Name"] = latest_per_jm.apply(scheme_for_row, axis=1)
 
-    # Ensure reading numeric and water qty numeric; fill NaNs
+    # Ensure reading numeric and water qty numeric; fill NaNs and round water qty to 2 decimals
     latest_per_jm["reading"] = pd.to_numeric(latest_per_jm["reading"], errors="coerce").fillna(0).astype(int)
-    latest_per_jm["water_quantity"] = pd.to_numeric(latest_per_jm["water_quantity"], errors="coerce").fillna(0.0)
+    latest_per_jm["water_quantity"] = pd.to_numeric(latest_per_jm["water_quantity"], errors="coerce").fillna(0.0).round(2)
 
     # Create display-safe formatted BFM Reading string (zero-padded) to avoid Styler integer formatting issues
     latest_per_jm["BFM Reading Display"] = latest_per_jm["reading"].apply(lambda x: f"{int(x):06d}")
@@ -384,11 +407,16 @@ else:
     daily_bfm.columns = ["Jalmitra", "Scheme Name", "BFM Reading", "Water Quantity (m³)"]
     daily_bfm = daily_bfm.sort_values("Jalmitra").reset_index(drop=True)
 
+    # Add S.No starting from 1
+    daily_bfm.insert(0, "S.No", range(1, len(daily_bfm) + 1))
+
     # Display: since BFM Reading is already a string formatted, format only Water Quantity
-    sty = daily_bfm.style.format({"Water Quantity (m³)":"{:.2f}"})
+    # Ensure Water Quantity is numeric for styling
     try:
+        sty = daily_bfm.style.format({"Water Quantity (m³)":"{:.2f}"})
         st.dataframe(sty.background_gradient(cmap="Blues", subset=["Water Quantity (m³)"]), height=360)
     except Exception:
+        # fallback: show plain dataframe
         st.dataframe(daily_bfm, height=360)
 
 # --------------------------- Export ---------------------------

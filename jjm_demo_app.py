@@ -1,8 +1,8 @@
 # jjm_demo_app.py
-# JJM Dashboard — clickable Jalmitra rows show 7-day performance chart
+# JJM Dashboard — styled Top/Worst tables + clickable "View" per-row charts
 # - Session-state demo data with SO = "ROKI RAY"
 # - Assamese Jalmitra names, Scheme Name column (Village PWSS)
-# - Top/Worst tables include a "View" button per row; clicking shows that Jalmitra's 7-day chart
+# - Top/Worst tables keep green/red gradients; View buttons below each styled table
 
 import streamlit as st
 import pandas as pd
@@ -15,13 +15,13 @@ from pathlib import Path
 # ---------------------------
 # Page config
 # ---------------------------
-st.set_page_config(page_title="JJM Dashboard — Clickable Rows", layout="wide")
+st.set_page_config(page_title="JJM Dashboard — Clickable Rows + Styled Tables", layout="wide")
 try:
     st.image("logo.jpg", width=160)
 except Exception:
     pass
 st.title("Jal Jeevan Mission — Unified Dashboard")
-st.markdown("Tap **View** beside any Jalmitra in the Top/Worst lists to see their 7-day performance chart.")
+st.markdown("Tap **View** beside any Jalmitra (below each styled table) to see their 7-day performance chart.")
 st.markdown("---")
 
 # ---------------------------
@@ -81,7 +81,7 @@ def reset_session_data():
     st.session_state["selected_jalmitra"] = None
 
 def generate_demo_data(total_schemes: int = 20, so_name: str = "ROKI RAY"):
-    """Generate demo schemes and readings with Assamese Jalmitra names."""
+    """Generate demo schemes and readings with Assamese Jalmitra names and scheme_name labels (PWSS)."""
     FIXED_UPDATE_PROB = 0.85
     schemes_rows = []
 
@@ -95,7 +95,6 @@ def generate_demo_data(total_schemes: int = 20, so_name: str = "ROKI RAY"):
     today = datetime.date.today()
     reading_samples = [110010, 215870, 150340, 189420, 200015, 234870]
 
-    # PWSS village names for scheme display
     village_names = [
         "Rampur", "Kahikuchi", "Dalgaon", "Guwahati", "Boko", "Moran", "Tezpur", "Sibsagar", "Jorhat", "Hajo",
         "Tihu", "Kokrajhar", "Nalbari", "Barpeta", "Rangia", "Goalpara", "Dhemaji", "Dibrugarh", "Mariani", "Sonari"
@@ -261,14 +260,13 @@ with col_right:
 st.markdown("---")
 
 # ---------------------------
-# Top & Worst Jalmitras (with clickable View buttons)
+# Top & Worst Jalmitras (styled tables + View buttons)
 # ---------------------------
 st.subheader("🏅 Jalmitra Performance — Top & Worst (Last 7 Days)")
 start_date = (today - datetime.timedelta(days=6)).isoformat()
 end_date = today_iso
 last7_all, metrics_cached = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
 
-# ensure metrics_df exists
 metrics_df = pd.DataFrame()
 
 if last7_all.empty:
@@ -286,33 +284,40 @@ else:
     max_qty = metrics_df['total_water_m3'].max() if not metrics_df['total_water_m3'].empty else 0.0
     metrics_df['qty_norm'] = metrics_df['total_water_m3'] / max_qty if max_qty > 0 else 0.0
     metrics_df['score'] = 0.5 * metrics_df['days_norm'] + 0.5 * metrics_df['qty_norm']
-    metrics_df = metrics_df.sort_values(by='score', ascending=False).reset_index(drop=True)
+    metrics_df = metrics_df.sort_values(by=['score','total_water_m3'], ascending=False).reset_index(drop=True)
     metrics_df['Rank'] = metrics_df.index + 1
 
-    # assign random Scheme Name (village PWSS) per jalmitra row
+    # Assign deterministic random scheme names for display
     village_names = [
         "Rampur", "Kahikuchi", "Dalgaon", "Guwahati", "Boko", "Moran", "Tezpur", "Sibsagar", "Jorhat", "Hajo",
         "Tihu", "Kokrajhar", "Nalbari", "Barpeta", "Rangia", "Goalpara", "Dhemaji", "Dibrugarh", "Mariani", "Sonari"
     ]
-    # keep assignment deterministic for session by seeding with session id (optional)
-    random.seed(42)
-    metrics_df['Scheme Name'] = [random.choice(village_names) + " PWSS" for _ in range(len(metrics_df))]
+    rnd = random.Random(42)
+    metrics_df['Scheme Name'] = [rnd.choice(village_names) + " PWSS" for _ in range(len(metrics_df))]
 
     top_n = 10
-    top_df = metrics_df.head(top_n)[['Rank','jalmitra','Scheme Name','days_updated','total_water_m3','score']].copy()
-    top_df.columns = ['Rank','Jalmitra','Scheme Name','Days Updated (last 7d)','Total Water (m³)','Score']
+    top_table = metrics_df.head(top_n)[['Rank','jalmitra','Scheme Name','days_updated','total_water_m3','score']].copy()
+    top_table.columns = ['Rank','Jalmitra','Scheme Name','Days Updated (last 7d)','Total Water (m³)','Score']
 
-    worst_df = metrics_df.sort_values(by='score', ascending=True).head(top_n)[['Rank','jalmitra','Scheme Name','days_updated','total_water_m3','score']].copy()
-    worst_df.columns = ['Rank','Jalmitra','Scheme Name','Days Updated (last 7d)','Total Water (m³)','Score']
+    worst_table = metrics_df.sort_values(by='score', ascending=True).head(top_n)[['Rank','jalmitra','Scheme Name','days_updated','total_water_m3','score']].copy()
+    worst_table.columns = ['Rank','Jalmitra','Scheme Name','Days Updated (last 7d)','Total Water (m³)','Score']
 
-    # Render Top and Worst with a small "View" button per row
+    # Show styled DataFrames first (keeps green/red highlights)
     col_t, col_w = st.columns([1,1])
     with col_t:
         st.markdown("### 🟢 Top 10 Performing Jalmitras")
-        # header
-        st.write("")  # spacer
-        for i, row in top_df.reset_index(drop=True).iterrows():
-            c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.2,2.2,1.4,1.4,1.0,0.9])
+        st.dataframe(top_table.style.format({'Total Water (m³)': '{:,.2f}','Score':'{:.3f}'}).background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Greens'), height=280)
+    with col_w:
+        st.markdown("### 🔴 Worst 10 Performing Jalmitras")
+        st.dataframe(worst_table.style.format({'Total Water (m³)': '{:,.2f}','Score':'{:.3f}'}).background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Reds_r'), height=280)
+
+    # Then render compact rows with View buttons (to keep styling and add clickability)
+    st.markdown("**Tap View to see 7-day chart for a Jalmitra**")
+    col_t2, col_w2 = st.columns([1,1])
+    with col_t2:
+        st.markdown("Top 10 — Actions")
+        for i, row in top_table.reset_index(drop=True).iterrows():
+            c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.4,2.4,1.2,1.2,0.9,0.9])
             c0.write(row['Rank'])
             c1.write(row['Jalmitra'])
             c2.write(row['Scheme Name'])
@@ -322,13 +327,12 @@ else:
             btn_key = f"view_top_{i}_{row['Jalmitra']}"
             if c6.button("View", key=btn_key):
                 st.session_state["selected_jalmitra"] = row['Jalmitra']
-        st.download_button("⬇️ Download Top 10 CSV", top_df.to_csv(index=False).encode('utf-8'), "top_10_jalmitras.csv")
+        st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode('utf-8'), "top_10_jalmitras.csv")
 
-    with col_w:
-        st.markdown("### 🔴 Worst 10 Performing Jalmitras")
-        st.write("")  # spacer
-        for i, row in worst_df.reset_index(drop=True).iterrows():
-            c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.2,2.2,1.4,1.4,1.0,0.9])
+    with col_w2:
+        st.markdown("Worst 10 — Actions")
+        for i, row in worst_table.reset_index(drop=True).iterrows():
+            c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.4,2.4,1.2,1.2,0.9,0.9])
             c0.write(row['Rank'])
             c1.write(row['Jalmitra'])
             c2.write(row['Scheme Name'])
@@ -338,7 +342,7 @@ else:
             btn_key = f"view_worst_{i}_{row['Jalmitra']}"
             if c6.button("View", key=btn_key):
                 st.session_state["selected_jalmitra"] = row['Jalmitra']
-        st.download_button("⬇️ Download Worst 10 CSV", worst_df.to_csv(index=False).encode('utf-8'), "worst_10_jalmitras.csv")
+        st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode('utf-8'), "worst_10_jalmitras.csv")
 
 # ---------------------------
 # If user clicked View, show the 7-day performance chart
@@ -347,13 +351,12 @@ if st.session_state.get("selected_jalmitra"):
     jm = st.session_state["selected_jalmitra"]
     st.markdown("---")
     st.subheader(f"7-day Performance — {jm}")
-    # compute daily totals for this jalmitra from last7_all
-    jf = last7_all.copy() if 'last7' in locals() else last7_all
-    # if last7_all variable name is different due to scope, use compute again
-    if jf is None or jf.empty:
-        # recompute defensively
-        last7_all2, _ = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
-        jf = last7_all2.copy() if not last7_all2.empty else pd.DataFrame()
+    # ensure we have last7_all to use (recompute defensively if needed)
+    if 'last7' not in locals() or locals().get('last7') is None:
+        last7_all_local, _ = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
+    else:
+        last7_all_local = last7_all
+    jf = last7_all_local.copy() if last7_all_local is not None else pd.DataFrame()
 
     if jf.empty:
         st.info("No data available for this Jalmitra in the last 7 days.")
@@ -362,18 +365,16 @@ if st.session_state.get("selected_jalmitra"):
         if jm_data.empty:
             st.info("No readings for this Jalmitra in the last 7 days.")
         else:
-            daily = jm_data.groupby('reading_date')['water_quantity'].sum().reindex(
-                pd.date_range(start=(datetime.date.today()-datetime.timedelta(days=6)), periods=7).astype(str),
-                fill_value=0
-            ).reset_index()
+            # create full 7-day series to show zeros if missing days
+            dates = [(datetime.date.today() - datetime.timedelta(days=d)).isoformat() for d in reversed(range(7))]
+            daily = jm_data.groupby('reading_date')['water_quantity'].sum().reindex(dates, fill_value=0).reset_index()
             daily.columns = ['reading_date','water_quantity']
-            fig = px.bar(daily, x='reading_date', y='water_quantity', labels={'reading_date':'Date','water_quantity':'Water (m³)'}, title=f"{jm} — Daily Water Supplied (last 7 days)")
+            fig = px.bar(daily, x='reading_date', y='water_quantity', labels={'reading_date':'Date','water_quantity':'Water (m³)'},
+                         title=f"{jm} — Daily Water Supplied (last 7 days)")
             st.plotly_chart(fig, use_container_width=True, height=380)
-            # small stats
             total = daily['water_quantity'].sum()
             days_with_updates = int((daily['water_quantity'] > 0).sum())
             st.markdown(f"**Total (7 days):** {total:.2f} m³  **Days updated:** {days_with_updates}/7")
-    # allow closing selection
     if st.button("Close View"):
         st.session_state["selected_jalmitra"] = None
 

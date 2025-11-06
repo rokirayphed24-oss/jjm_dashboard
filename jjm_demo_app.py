@@ -1,8 +1,9 @@
 # jjm_demo_app.py
-# JJM Dashboard — Full (fixed Pandas Styler BFM-format error)
+# JJM Dashboard — Full (adds Web View / Phone View toggle)
 # - Styled Top/Worst tables
 # - Clickable "View" per Jalmitra (7-day chart)
 # - "📅 BFM Readings Updated Today" with Scheme Name and safe formatting
+# - View Mode: "Web View" (desktop) or "Phone View" (stacked/mobile)
 
 import streamlit as st
 import pandas as pd
@@ -15,6 +16,10 @@ from typing import Tuple
 st.set_page_config(page_title="JJM Dashboard — Full", layout="wide")
 st.title("Jal Jeevan Mission — Unified Dashboard")
 st.markdown("For Section Officer **ROKI RAY** — Jalmitra performance, daily updates, and readings.")
+st.markdown("---")
+
+# --------------------------- View mode toggle ---------------------------
+view_mode = st.radio("View Mode", ["Web View", "Phone View"], horizontal=True)
 st.markdown("---")
 
 # --------------------------- Helpers ---------------------------
@@ -154,7 +159,7 @@ if schemes.empty:
     st.info("No schemes found. Generate demo data first.")
     st.stop()
 
-# --------------------------- Pies ---------------------------
+# --------------------------- Pies (layout adapts to view_mode) ---------------------------
 func_counts = schemes["functionality"].value_counts()
 today_iso = today.isoformat()
 
@@ -194,26 +199,41 @@ updated_count = int(today_upd["jalmitra"].nunique()) if not today_upd.empty else
 total_functional = int(len(schemes[schemes["functionality"] == "Functional"]))
 absent_count = max(total_functional - updated_count, 0)
 
-col1, col2 = st.columns(2)
-with col1:
+if view_mode == "Web View":
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### Scheme Functionality")
+        fig1 = px.pie(names=func_counts.index, values=func_counts.values, color=func_counts.index,
+                      color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"})
+        fig1.update_traces(textinfo='percent+label')
+        st.plotly_chart(fig1, use_container_width=True)
+    with col2:
+        st.markdown("#### Jalmitra Updates (Today)")
+        df_part = pd.DataFrame({"status":["Updated","Absent"], "count":[updated_count, absent_count]})
+        if df_part["count"].sum() == 0:
+            df_part = pd.DataFrame({"status":["Updated","Absent"], "count":[0, total_functional if total_functional>0 else 1]})
+        fig2 = px.pie(df_part, names="status", values="count", color="status", color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"})
+        fig2.update_traces(textinfo='percent+label')
+        st.plotly_chart(fig2, use_container_width=True)
+else:
+    # Phone View: stack pies vertically for narrow screens
     st.markdown("#### Scheme Functionality")
     fig1 = px.pie(names=func_counts.index, values=func_counts.values, color=func_counts.index,
                   color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"})
     fig1.update_traces(textinfo='percent+label')
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, use_container_width=True, height=260)
 
-with col2:
     st.markdown("#### Jalmitra Updates (Today)")
     df_part = pd.DataFrame({"status":["Updated","Absent"], "count":[updated_count, absent_count]})
     if df_part["count"].sum() == 0:
         df_part = pd.DataFrame({"status":["Updated","Absent"], "count":[0, total_functional if total_functional>0 else 1]})
     fig2 = px.pie(df_part, names="status", values="count", color="status", color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"})
     fig2.update_traces(textinfo='percent+label')
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, use_container_width=True, height=260)
 
 st.markdown("---")
 
-# --------------------------- Top/Worst + View ---------------------------
+# --------------------------- Top/Worst + View (layout adapts) ---------------------------
 start_date = (today - datetime.timedelta(days=6)).isoformat()
 end_date = today_iso
 last7, metrics = compute_metrics(readings, schemes, so, start_date, end_date)
@@ -238,47 +258,60 @@ else:
     worst_table = metrics.sort_values(by="score", ascending=True).head(top_n)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","score"]].copy()
     worst_table.columns = ["Rank","Jalmitra","Scheme Name","Days Updated (last 7d)","Total Water (m³)","Score"]
 
-    # show styled tables
-    col_t, col_w = st.columns([1,1])
-    with col_t:
+    if view_mode == "Web View":
+        # side-by-side styled tables (desktop)
+        col_t, col_w = st.columns([1,1])
+        with col_t:
+            st.markdown("### 🟢 Top 10 Performing Jalmitras")
+            st.dataframe(top_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Greens"), height=300)
+        with col_w:
+            st.markdown("### 🔴 Worst 10 Performing Jalmitras")
+            st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r"), height=300)
+
+        # compact rows with View buttons below
+        st.markdown("**Tap View to see 7-day chart**")
+        col_t2, col_w2 = st.columns([1,1])
+        with col_t2:
+            st.markdown("Top 10 — Actions")
+            for i, row in top_table.reset_index(drop=True).iterrows():
+                c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.4,2.2,1.2,1.2,0.9,0.9])
+                c0.write(row["Rank"]); c1.write(row["Jalmitra"]); c2.write(row["Scheme Name"])
+                c3.write(row["Days Updated (last 7d)"]); c4.write(f"{row['Total Water (m³)']:,}"); c5.write(f"{row['Score']:.3f}")
+                btn_key = f"view_top_{i}_{row['Jalmitra']}"
+                if c6.button("View", key=btn_key):
+                    st.session_state["selected_jalmitra"] = row["Jalmitra"]
+            st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode("utf-8"), "top_10_jalmitras.csv")
+
+        with col_w2:
+            st.markdown("Worst 10 — Actions")
+            for i, row in worst_table.reset_index(drop=True).iterrows():
+                c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.4,2.2,1.2,1.2,0.9,0.9])
+                c0.write(row["Rank"]); c1.write(row["Jalmitra"]); c2.write(row["Scheme Name"])
+                c3.write(row["Days Updated (last 7d)"]); c4.write(f"{row['Total Water (m³)']:,}"); c5.write(f"{row['Score']:.3f}")
+                btn_key = f"view_worst_{i}_{row['Jalmitra']}"
+                if c6.button("View", key=btn_key):
+                    st.session_state["selected_jalmitra"] = row["Jalmitra"]
+            st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode("utf-8"), "worst_10_jalmitras.csv")
+
+    else:
+        # Phone View: stack tables and action rows vertically for easier scrolling
         st.markdown("### 🟢 Top 10 Performing Jalmitras")
-        st.dataframe(top_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Greens"), height=300)
-    with col_w:
-        st.markdown("### 🔴 Worst 10 Performing Jalmitras")
-        st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r"), height=300)
-
-    # compact rows with View buttons (preserve styled tables but allow clicks)
-    st.markdown("**Tap View to see 7-day chart**")
-    col_t2, col_w2 = st.columns([1,1])
-    with col_t2:
-        st.markdown("Top 10 — Actions")
+        st.dataframe(top_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Greens"), height=360)
+        st.markdown("Top 10 — Actions (tap View)")
         for i, row in top_table.reset_index(drop=True).iterrows():
-            c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.4,2.2,1.2,1.2,0.9,0.9])
-            c0.write(row["Rank"])
-            c1.write(row["Jalmitra"])
-            c2.write(row["Scheme Name"])
-            c3.write(row["Days Updated (last 7d)"])
-            c4.write(f"{row['Total Water (m³)']:,}")
-            c5.write(f"{row['Score']:.3f}")
-            btn_key = f"view_top_{i}_{row['Jalmitra']}"
-            if c6.button("View", key=btn_key):
-                st.session_state["selected_jalmitra"] = row["Jalmitra"]
-        st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode("utf-8"), "top_10_jalmitras.csv")
+            cols = st.columns([1.2, 2.6, 1.2])
+            cols[0].write(f"#{int(row['Rank'])} {row['Jalmitra']}")
+            cols[1].write(row["Scheme Name"])
+            cols[2].button("View", key=f"p_view_top_{i}_{row['Jalmitra']}") and st.session_state.update({"selected_jalmitra": row["Jalmitra"]})
 
-    with col_w2:
-        st.markdown("Worst 10 — Actions")
+        st.markdown("### 🔴 Worst 10 Performing Jalmitras")
+        st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}", "Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r"), height=360)
+        st.markdown("Worst 10 — Actions (tap View)")
         for i, row in worst_table.reset_index(drop=True).iterrows():
-            c0, c1, c2, c3, c4, c5, c6 = st.columns([0.6,1.4,2.2,1.2,1.2,0.9,0.9])
-            c0.write(row["Rank"])
-            c1.write(row["Jalmitra"])
-            c2.write(row["Scheme Name"])
-            c3.write(row["Days Updated (last 7d)"])
-            c4.write(f"{row['Total Water (m³)']:,}")
-            c5.write(f"{row['Score']:.3f}")
-            btn_key = f"view_worst_{i}_{row['Jalmitra']}"
-            if c6.button("View", key=btn_key):
-                st.session_state["selected_jalmitra"] = row["Jalmitra"]
-        st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode("utf-8"), "worst_10_jalmitras.csv")
+            cols = st.columns([1.2, 2.6, 1.2])
+            cols[0].write(f"#{int(row['Rank'])} {row['Jalmitra']}")
+            cols[1].write(row["Scheme Name"])
+            cols[2].button("View", key=f"p_view_worst_{i}_{row['Jalmitra']}") and st.session_state.update({"selected_jalmitra": row["Jalmitra"]})
 
 # --------------------------- View chart ---------------------------
 if st.session_state.get("selected_jalmitra"):
@@ -287,7 +320,7 @@ if st.session_state.get("selected_jalmitra"):
     st.subheader(f"7-day Performance — {jm}")
     # recompute/ensure last7 available
     if 'last7' not in locals() or last7 is None:
-        last7, _ = compute_metrics(readings, schemes, so, start_date, end_date)
+        last7, _ = compute_metrics(readings, schemes, so, start_date, end_date) if ('start_date' in locals() and 'end_date' in locals()) else compute_metrics(readings, schemes, so, (today - datetime.timedelta(days=6)).isoformat(), today_iso)
     jm_data = last7[last7["jalmitra"] == jm] if (not last7.empty) else pd.DataFrame()
     if jm_data.empty:
         st.info("No readings for this Jalmitra.")
@@ -299,8 +332,11 @@ if st.session_state.get("selected_jalmitra"):
                      title=f"{jm} — Daily Water Supplied (Last 7 Days)")
         st.plotly_chart(fig, use_container_width=True, height=380)
         st.markdown(f"**Total:** {daily['water_quantity'].sum():.2f} m³  **Days Updated:** {(daily['water_quantity']>0).sum()}/7")
-    if st.button("Close View"):
-        st.session_state["selected_jalmitra"] = None
+    if view_mode == "Web View":
+        if st.button("Close View"): st.session_state["selected_jalmitra"] = None
+    else:
+        # in phone view show a larger close button
+        if st.button("Close View (Phone)"): st.session_state["selected_jalmitra"] = None
 
 # --------------------------- NEW — Daily BFM Readings ---------------------------
 st.markdown("---")
@@ -350,13 +386,9 @@ else:
 
     # Display: since BFM Reading is already a string formatted, format only Water Quantity
     sty = daily_bfm.style.format({"Water Quantity (m³)":"{:.2f}"})
-    # apply blue gradient only to the numeric column; Styler expects numeric col for gradient, so create a helper column
-    # we'll temporarily add a numeric copy for gradient and then drop it from display if necessary.
-    # But pandas Styler allows subset selection; gradient will skip non-numeric cells.
     try:
         st.dataframe(sty.background_gradient(cmap="Blues", subset=["Water Quantity (m³)"]), height=360)
     except Exception:
-        # last-resort: render without styling if styler fails
         st.dataframe(daily_bfm, height=360)
 
 # --------------------------- Export ---------------------------

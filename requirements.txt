@@ -8,5 +8,7 @@ Pillow
 matplotlib
 plotly
 altair
+streamlit-plotly-events
+
 
 

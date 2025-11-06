@@ -1,7 +1,9 @@
 # jjm_demo_app.py
-# Unified Streamlit app — clickable pies that filter tables
-# - Uses streamlit-plotly-events for Plotly click capture (fallback to buttons if not installed)
-# - All previous features preserved: session-state demo data, 50/50 weights, Top/Worst tables, Plotly 7-day chart
+# Unified Streamlit app — Overview layout updated:
+# - Left: Scheme Functionality pie
+# - Right: Jalmitra Updates pie (today)
+# - Below those pies: Top 10 (green) and Worst 10 (red; darkest red for worst)
+# - Session-state storage, Plotly 7-day chart, CSV export, etc.
 
 import streamlit as st
 import pandas as pd
@@ -13,23 +15,16 @@ import plotly.express as px
 from typing import Tuple
 from pathlib import Path
 
-# Try to import plotly click event helper; if unavailable use fallback UI
-try:
-    from streamlit_plotly_events import plotly_events
-    PLOTLY_EVENTS_AVAILABLE = True
-except Exception:
-    PLOTLY_EVENTS_AVAILABLE = False
-
 # ---------------------------
 # Page config
 # ---------------------------
-st.set_page_config(page_title="JJM Dashboard — Clickable Pies", layout="wide")
+st.set_page_config(page_title="JJM Unified Dashboard — Overview Layout", layout="wide")
 try:
     st.image("logo.jpg", width=160)
 except Exception:
     pass
-st.title("Jal Jeevan Mission — Unified Dashboard (Clickable Pies)")
-st.markdown("Click a pie slice to filter the corresponding table(s). If your environment lacks `streamlit-plotly-events`, fallback buttons are shown.")
+st.title("Jal Jeevan Mission — Unified Dashboard")
+st.markdown("Overview: scheme functionality and jalmitra updates side-by-side; Top & Worst lists below them.")
 st.markdown("---")
 
 # ---------------------------
@@ -50,11 +45,8 @@ def init_state():
         st.session_state["next_reading_id"] = 1
     if "demo_generated" not in st.session_state:
         st.session_state["demo_generated"] = False
-    # store current pie selections
-    if "selected_functionality_slice" not in st.session_state:
-        st.session_state["selected_functionality_slice"] = None  # "Functional" / "Non-Functional" / None
-    if "selected_updates_slice" not in st.session_state:
-        st.session_state["selected_updates_slice"] = None  # "Updated" / "Absent" / None
+    if "generating" not in st.session_state:
+        st.session_state["generating"] = False
 
 init_state()
 
@@ -70,8 +62,7 @@ def reset_session_data():
     st.session_state["next_scheme_id"] = 1
     st.session_state["next_reading_id"] = 1
     st.session_state["demo_generated"] = False
-    st.session_state["selected_functionality_slice"] = None
-    st.session_state["selected_updates_slice"] = None
+    st.session_state["generating"] = False
 
 def generate_demo_data(total_schemes: int = 20, so_name: str = "SO-Guwahati"):
     """
@@ -206,7 +197,7 @@ if schemes_df.empty:
     st.stop()
 
 # ---------------------------
-# Overview: side-by-side pies (clickable) + optional image
+# Overview: show an optional image, then side-by-side pies
 # ---------------------------
 st.subheader("📋 Overview")
 
@@ -228,138 +219,45 @@ today_updates = merged_today[
     (merged_today['functionality'] == 'Functional') &
     (merged_today['so_name'] == so_name)
 ]
-updated_set = set(today_updates['jalmitra'].unique()) if not today_updates.empty else set()
+updated_count = int(today_updates['jalmitra'].nunique()) if not today_updates.empty else 0
 total_functional = int(len(schemes_df[schemes_df['functionality'] == 'Functional']))
-updated_count = len(updated_set)
 absent_count = max(total_functional - updated_count, 0)
 
-# Build the Plotly pie figures
-fig_func = px.pie(names=func_counts.index, values=func_counts.values, title="Scheme Functionality",
-                  color=func_counts.index, color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"}, hole=0.3)
-fig_func.update_traces(textinfo='percent+label')
-fig_func.update_layout(margin=dict(l=10,r=10,t=20,b=10), height=240)
+# Top row: two pies side-by-side (keep size proportional)
+col_left, col_right = st.columns([1,1])
 
-df_part = pd.DataFrame({"status": ["Updated","Absent"], "count": [updated_count, absent_count]})
-if df_part['count'].sum() == 0:
-    df_part = pd.DataFrame({"status":["Updated","Absent"], "count":[0, total_functional if total_functional>0 else 1]})
-fig_updates = px.pie(df_part, names='status', values='count', title="Jalmitra Updates (Today)",
-                     color='status', color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"}, hole=0.3)
-fig_updates.update_traces(textinfo='percent+label')
-fig_updates.update_layout(margin=dict(l=10,r=10,t=20,b=10), height=240)
-
-# Display pies side-by-side and capture clicks (if available)
-col_l, col_r = st.columns([1,1])
-with col_l:
+with col_left:
     st.markdown("#### Scheme Functionality")
-    st.plotly_chart(fig_func, use_container_width=True)
-    # capture click via streamlit-plotly-events if available
-    if PLOTLY_EVENTS_AVAILABLE:
-        clicks = plotly_events(fig_func, click_event=True, hover_event=False)
-        if clicks:
-            # clicks is a list; extract the label clicked (for pie it's 'label' in point)
-            label = clicks[0].get('label') or clicks[0].get('x') or clicks[0].get('name')
-            # Acceptable labels: 'Functional' or 'Non-Functional'
-            if label in ["Functional", "Non-Functional"]:
-                st.session_state["selected_functionality_slice"] = label
-    else:
-        st.info("Tip: install 'streamlit-plotly-events' to enable click-on-pie behaviour. Fallback buttons shown below.")
-        if st.button("Show Functional Schemes"):
-            st.session_state["selected_functionality_slice"] = "Functional"
-        if st.button("Show Non-Functional Schemes"):
-            st.session_state["selected_functionality_slice"] = "Non-Functional"
+    fig1 = px.pie(names=func_counts.index, values=func_counts.values, title="", hole=0.3,
+                  color=func_counts.index, color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"})
+    fig1.update_traces(textinfo='percent+label')
+    # small card-like container: use plotly size via layout margin
+    fig1.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=220, legend=dict(orientation="h"))
+    st.plotly_chart(fig1, use_container_width=True)
 
-with col_r:
+with col_right:
     st.markdown("#### Jalmitra Updates (Today)")
-    st.plotly_chart(fig_updates, use_container_width=True)
-    if PLOTLY_EVENTS_AVAILABLE:
-        clicks2 = plotly_events(fig_updates, click_event=True, hover_event=False)
-        if clicks2:
-            label2 = clicks2[0].get('label') or clicks2[0].get('x') or clicks2[0].get('name')
-            if label2 in ["Updated", "Absent"]:
-                st.session_state["selected_updates_slice"] = label2
-    else:
-        if st.button("Show Updated Jalmitras"):
-            st.session_state["selected_updates_slice"] = "Updated"
-        if st.button("Show Absent Jalmitras"):
-            st.session_state["selected_updates_slice"] = "Absent"
-
-# Small clear selection buttons
-col_clear1, col_clear2 = st.columns([1,1])
-with col_clear1:
-    if st.button("Clear Functionality Filter"):
-        st.session_state["selected_functionality_slice"] = None
-with col_clear2:
-    if st.button("Clear Updates Filter"):
-        st.session_state["selected_updates_slice"] = None
+    # build df with updated vs absent
+    df_part = pd.DataFrame({
+        "status": ["Updated", "Absent"],
+        "count": [updated_count, absent_count]
+    })
+    # Ensure counts show 100% when zero rows (avoid empty pie)
+    if df_part['count'].sum() == 0:
+        # create a neutral pie showing 0/100 for visual parity
+        df_part = pd.DataFrame({"status":["Updated","Absent"], "count":[0, total_functional if total_functional>0 else 1]})
+    fig2 = px.pie(df_part, names='status', values='count', title="", hole=0.3,
+                  color='status', color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"})
+    fig2.update_traces(textinfo='percent+label')
+    fig2.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=220, legend=dict(orientation="h"))
+    st.plotly_chart(fig2, use_container_width=True)
 
 st.markdown("---")
 
 # ---------------------------
-# Schemes table (responds to functionality pie selection)
+# Below pies: Top & Worst lists (maintain proportions & sizes)
 # ---------------------------
-st.subheader("All Schemes under SO")
-if st.session_state["selected_functionality_slice"]:
-    sel = st.session_state["selected_functionality_slice"]
-    st.markdown(f"**Filtered:** {sel}")
-    st.dataframe(schemes_df[schemes_df['functionality'] == sel], height=220)
-else:
-    st.dataframe(schemes_df, height=220)
-
-st.subheader("Functional Schemes under SO")
-functional_schemes = schemes_df[schemes_df['functionality'] == "Functional"]
-if functional_schemes.empty:
-    st.info("No functional schemes found under this SO.")
-else:
-    # If functionality filter present but not 'Functional', show empty
-    if st.session_state["selected_functionality_slice"] and st.session_state["selected_functionality_slice"] != "Functional":
-        st.info("Functionality filter applied (not 'Functional') — no functional schemes to show.")
-    else:
-        st.dataframe(functional_schemes, height=220)
-
-# ---------------------------
-# Today's readings and participation (details adjust with updates pie selection)
-# ---------------------------
-st.markdown("---")
-st.subheader("BFM Readings by Jalmitras Today (Functional schemes)")
-
-readings_today = today_updates[['scheme_name','jalmitra','reading','reading_time','water_quantity']] if not today_updates.empty else pd.DataFrame(columns=['scheme_name','jalmitra','reading','reading_time','water_quantity'])
-st.write(f"Total readings recorded today: **{len(readings_today)}**")
-if not readings_today.empty:
-    st.dataframe(readings_today, height=220)
-else:
-    st.info("No readings recorded today for functional schemes.")
-
-# Show small details table for Updated or Absent based on selection
-st.markdown("---")
-st.subheader("Jalmitra Details (based on Updates pie selection)")
-selected_updates = st.session_state["selected_updates_slice"]
-if selected_updates == "Updated":
-    # show distinct updated jalmitras with their total water today
-    if not today_updates.empty:
-        upd_summary = today_updates.groupby('jalmitra')['water_quantity'].sum().reset_index().rename(columns={'water_quantity':'Water Today (m³)'})
-        st.dataframe(upd_summary, height=220)
-    else:
-        st.info("No updated jalmitras today.")
-elif selected_updates == "Absent":
-    # compute absent jalmitras among functional schemes
-    # assume jalmitra mapping per scheme — find jalmitras mapped to functional schemes and not in updated_set
-    jalmitra_mapped = set(functional_schemes.reset_index().index)  # fallback mapping not used; instead map by deterministic JM list presence
-    # better approach: jalmitras_list contains JM-1..JM-N; absent defined as those in jalmitras_list not in updated_set
-    absent_list = [jm for jm in jalmitras_list if jm not in updated_set]
-    if absent_list:
-        df_abs = pd.DataFrame({'Jalmitra': absent_list})
-        st.dataframe(df_abs, height=220)
-    else:
-        st.info("No absent jalmitras today.")
-else:
-    st.info("Click the Updates pie (or use fallback buttons) to view Updated or Absent Jalmitra details here.")
-
-# ---------------------------
-# Rankings: Top & Worst (filtered by updates selection if set)
-# ---------------------------
-st.markdown("---")
 st.subheader("🏅 Jalmitra Performance — Top & Worst (Last 7 Days)")
-
 start_date = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
 end_date = today
 last7_all, metrics_cached = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
@@ -367,7 +265,7 @@ last7_all, metrics_cached = compute_metrics_and_pivot(readings_df, schemes_df, s
 if last7_all.empty:
     st.info("No readings in the last 7 days for functional schemes. Generate demo data to see rankings.")
 else:
-    # prepare metrics and ensure all jalmitras present
+    # ensure all expected jalmitras present
     metrics_df = metrics_cached.copy()
     expected_jalmitras = jalmitras_list if jalmitras_list else [f"JM-{i+1}" for i in range(len(schemes_df))]
     for jm in expected_jalmitras:
@@ -390,59 +288,57 @@ else:
     weight_qty = 0.5
     metrics_df['score'] = metrics_df['days_norm'] * weight_freq + metrics_df['qty_norm'] * weight_qty
 
-    # apply updates selection filter (if any)
-    selected_updates = st.session_state["selected_updates_slice"]
-    if selected_updates == "Updated":
-        # keep only those who updated today
-        metrics_df = metrics_df[metrics_df['jalmitra'].isin(updated_set)].copy()
-    elif selected_updates == "Absent":
-        metrics_df = metrics_df[~metrics_df['jalmitra'].isin(updated_set)].copy()
-    # else show all
+    metrics_df = metrics_df.sort_values(by=['score','total_water_m3'], ascending=False).reset_index(drop=True)
+    metrics_df['Rank'] = metrics_df.index + 1
+    metrics_df['total_water_m3'] = metrics_df['total_water_m3'].round(2)
+    metrics_df['score'] = metrics_df['score'].round(3)
 
-    if metrics_df.empty:
-        st.info("No Jalmitras match the selected filter.")
-    else:
-        metrics_df = metrics_df.sort_values(by=['score','total_water_m3'], ascending=False).reset_index(drop=True)
-        metrics_df['Rank'] = metrics_df.index + 1
-        metrics_df['total_water_m3'] = metrics_df['total_water_m3'].round(2)
-        metrics_df['score'] = metrics_df['score'].round(3)
+    top_n = 10
+    top_table = metrics_df.sort_values(by='score', ascending=False).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
+    top_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
 
-        top_n = 10
-        top_table = metrics_df.sort_values(by='score', ascending=False).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
-        top_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
+    # worst_table sorted ascending so worst (lowest score) appears at top
+    worst_table = metrics_df.sort_values(by='score', ascending=True).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
+    worst_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
 
-        worst_table = metrics_df.sort_values(by='score', ascending=True).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
-        worst_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
+    # Styling: Top = Greens, Worst = dark-red -> light-red
+    def style_top(df: pd.DataFrame):
+        sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
+        sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Greens')
+        sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
+        return sty
 
-        def style_top(df: pd.DataFrame):
-            sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
-            sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Greens')
-            sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
-            return sty
+    def style_worst(df: pd.DataFrame):
+        """
+        Use a custom red gradient so the first row (worst) is darkest.
+        We'll map values to colors using the 'Reds_r' colormap which is reversed Reds:
+        small values (worst scores) -> darker red; larger values -> lighter red.
+        """
+        sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
+        sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Reds_r')
+        sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
+        return sty
 
-        def style_worst(df: pd.DataFrame):
-            sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
-            sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Reds_r')
-            sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
-            return sty
+    # layout: place Top left, Worst right, matching widths and heights
+    col_t, col_w = st.columns([1,1])
+    with col_t:
+        st.markdown("### 🟢 Top 10 Performing Jalmitras")
+        st.dataframe(style_top(top_table), height=420)
+        st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode('utf-8'), file_name="jjm_top_10.csv", mime="text/csv")
 
-        col_t, col_w = st.columns([1,1])
-        with col_t:
-            st.markdown("### 🟢 Top 10 Performing Jalmitras")
-            st.dataframe(style_top(top_table), height=420)
-            st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode('utf-8'), file_name="jjm_top_10.csv", mime="text/csv")
-        with col_w:
-            st.markdown("### 🔴 Worst 10 Performing Jalmitras")
-            st.dataframe(style_worst(worst_table), height=420)
-            st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode('utf-8'), file_name="jjm_worst_10.csv", mime="text/csv")
+    with col_w:
+        st.markdown("### 🔴 Worst 10 Performing Jalmitras")
+        st.dataframe(style_worst(worst_table), height=420)
+        st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode('utf-8'), file_name="jjm_worst_10.csv", mime="text/csv")
 
-# ---------------------------
-# 7-day line chart
-# ---------------------------
 st.markdown("---")
-st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
 
+# ---------------------------
+# 7-day line chart and rest of dashboard unchanged
+# ---------------------------
+st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
 last7_all2, metrics_cached2 = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
+
 if last7_all2.empty:
     st.info("No readings for the last 7 days for functional schemes.")
 else:
@@ -479,14 +375,12 @@ else:
         fig.update_xaxes(categoryorder='array', categoryarray=sorted(plot_df['reading_date'].unique(), reverse=True))
     st.plotly_chart(fig, use_container_width=True, height=420)
 
-# ---------------------------
-# Snapshot exports & info
-# ---------------------------
 st.markdown("---")
 st.subheader("Export Snapshot")
 st.markdown("Download current Schemes, Readings, and Metrics as CSVs.")
 st.download_button("Download Schemes CSV", schemes_df.to_csv(index=False).encode('utf-8'), file_name='schemes_snapshot.csv', mime='text/csv')
 st.download_button("Download Readings CSV", readings_df.to_csv(index=False).encode('utf-8'), file_name='readings_snapshot.csv', mime='text/csv')
+# metrics_df might be undefined if no last7_all; guard by using metrics_df if present
 try:
     st.download_button("Download Metrics CSV", metrics_df.to_csv(index=False).encode('utf-8'), file_name='metrics_snapshot.csv', mime='text/csv')
 except Exception:
@@ -503,9 +397,5 @@ with st.expander("ℹ️ How ranking is computed"):
     - Score = 0.50 * days_norm + 0.50 * qty_norm (fixed 50/50 weighting).
     - Top table sorts by score descending; Worst table sorts by score ascending.
     """)
-
-# Quick note about dependency for native clickable pies
-if not PLOTLY_EVENTS_AVAILABLE:
-    st.warning("For native pie-click behaviour install 'streamlit-plotly-events' and add it to requirements.txt (package name: streamlit-plotly-events).")
 
 st.success(f"Dashboard ready. Demo data generated: {st.session_state.get('demo_generated', False)}. Data stored only for this session.")

@@ -1,16 +1,9 @@
 # jjm_demo_app.py
-# Unified Streamlit app — full code (only removed: per-day update probability UI & weight slider)
-# Behavior:
-# - Session-state storage (no SQLite) for stability on Streamlit Cloud
-# - Full dashboard: landing, role select (SO/AEE/EE placeholders), demo data generator/remover,
-#   schemes lists, today's readings, participation pie, 3-col water table, interactive Plotly 7-day chart,
-#   Top (green) & Worst (red) Jalmitra rankings (50/50 weighted score), CSV exports, snapshot exports,
-#   deployment notes.
-# - Rankings = 50% * days_updated_norm + 50% * qty_norm (locked in code)
-# - Worst table uses darkest red for the worst performer and decreases intensity for better ones
-#
-# Save as jjm_demo_app.py and run: streamlit run jjm_demo_app.py
-# Make sure your requirements.txt includes: streamlit, pandas, numpy, plotly
+# Unified Streamlit app — Overview layout updated:
+# - Left: Scheme Functionality pie
+# - Right: Jalmitra Updates pie (today)
+# - Below those pies: Top 10 (green) and Worst 10 (red; darkest red for worst)
+# - Session-state storage, Plotly 7-day chart, CSV export, etc.
 
 import streamlit as st
 import pandas as pd
@@ -20,17 +13,18 @@ import random
 import io
 import plotly.express as px
 from typing import Tuple
+from pathlib import Path
 
 # ---------------------------
 # Page config
 # ---------------------------
-st.set_page_config(page_title="JJM Unified Dashboard (Full)", layout="wide")
+st.set_page_config(page_title="JJM Unified Dashboard — Overview Layout", layout="wide")
 try:
     st.image("logo.jpg", width=160)
 except Exception:
     pass
 st.title("Jal Jeevan Mission — Unified Dashboard")
-st.markdown("Full dashboard. Rankings use a fixed 50% Frequency + 50% Quantity weighting (locked).")
+st.markdown("Overview: scheme functionality and jalmitra updates side-by-side; Top & Worst lists below them.")
 st.markdown("---")
 
 # ---------------------------
@@ -77,7 +71,7 @@ def generate_demo_data(total_schemes: int = 20, so_name: str = "SO-Guwahati"):
     - Maps deterministic Jalmitras JM-1..JM-N to schemes,
     - Creates up to 7 days of readings for Functional schemes using fixed internal probability (85%).
     """
-    FIXED_UPDATE_PROB = 0.85  # fixed internal probability, removed per-day UI as requested
+    FIXED_UPDATE_PROB = 0.85  # fixed internal probability
     schemes_rows = []
     jalmitras = [f"JM-{i+1}" for i in range(total_schemes)]
     today = datetime.date.today()
@@ -202,87 +196,153 @@ if schemes_df.empty:
     st.info("No schemes found. Generate demo data to populate the dashboard.")
     st.stop()
 
-# --- Overview pie chart (Functional vs Non-Functional) ---
-if st.session_state.get("demo_generated", False):
-    st.subheader("📊 Overview")
-    func_counts = schemes_df['functionality'].value_counts()
-    fig1 = px.pie(names=func_counts.index, values=func_counts.values, title="Functional vs Non-Functional",
-                  color=func_counts.index, color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"}, hole=0.12)
-    st.plotly_chart(fig1, use_container_width=False, width=360)
-
-st.markdown("---")
-st.subheader("All Schemes under SO")
-st.dataframe(schemes_df, height=220)
-
-st.subheader("Functional Schemes under SO")
-functional_schemes = schemes_df[schemes_df['functionality'] == "Functional"]
-if functional_schemes.empty:
-    st.info("No functional schemes found under this SO.")
-else:
-    st.dataframe(functional_schemes, height=220)
-
 # ---------------------------
-# Today's readings (Functional only)
+# Overview: show an optional image, then side-by-side pies
 # ---------------------------
+st.subheader("📋 Overview")
+
+# show provided image at top-left of overview if exists
+img_path = Path("/mnt/data/assaa.png")
+if img_path.exists():
+    try:
+        st.image(str(img_path), width=220, caption="Overview snapshot")
+    except Exception:
+        pass
+
+# Prepare data for pies
+func_counts = schemes_df['functionality'].value_counts()
+# compute today's updates counts (for functional schemes)
 today = datetime.date.today().isoformat()
+merged_today = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left')
+today_updates = merged_today[
+    (merged_today['reading_date'] == today) &
+    (merged_today['functionality'] == 'Functional') &
+    (merged_today['so_name'] == so_name)
+]
+updated_count = int(today_updates['jalmitra'].nunique()) if not today_updates.empty else 0
+total_functional = int(len(schemes_df[schemes_df['functionality'] == 'Functional']))
+absent_count = max(total_functional - updated_count, 0)
+
+# Top row: two pies side-by-side (keep size proportional)
+col_left, col_right = st.columns([1,1])
+
+with col_left:
+    st.markdown("#### Scheme Functionality")
+    fig1 = px.pie(names=func_counts.index, values=func_counts.values, title="", hole=0.3,
+                  color=func_counts.index, color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"})
+    fig1.update_traces(textinfo='percent+label')
+    # small card-like container: use plotly size via layout margin
+    fig1.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=220, legend=dict(orientation="h"))
+    st.plotly_chart(fig1, use_container_width=True)
+
+with col_right:
+    st.markdown("#### Jalmitra Updates (Today)")
+    # build df with updated vs absent
+    df_part = pd.DataFrame({
+        "status": ["Updated", "Absent"],
+        "count": [updated_count, absent_count]
+    })
+    # Ensure counts show 100% when zero rows (avoid empty pie)
+    if df_part['count'].sum() == 0:
+        # create a neutral pie showing 0/100 for visual parity
+        df_part = pd.DataFrame({"status":["Updated","Absent"], "count":[0, total_functional if total_functional>0 else 1]})
+    fig2 = px.pie(df_part, names='status', values='count', title="", hole=0.3,
+                  color='status', color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"})
+    fig2.update_traces(textinfo='percent+label')
+    fig2.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=220, legend=dict(orientation="h"))
+    st.plotly_chart(fig2, use_container_width=True)
+
 st.markdown("---")
-st.subheader("BFM Readings by Jalmitras Today (Functional schemes)")
-
-if readings_df.empty:
-    st.info("No readings available. Generate demo data to create readings.")
-else:
-    merged_today = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left')
-    readings_today = merged_today[
-        (merged_today['functionality'] == 'Functional') &
-        (merged_today['so_name'] == so_name) &
-        (merged_today['reading_date'] == today)
-    ][['scheme_name','jalmitra','reading','reading_time','water_quantity']]
-
-    st.write(f"Total readings recorded today: **{len(readings_today)}**")
-    if not readings_today.empty:
-        st.dataframe(readings_today, height=220)
-    else:
-        st.info("No readings recorded today for functional schemes.")
-
-    # Jalmitra participation pie chart (Updated vs Absent)
-    total_functional = len(functional_schemes)
-    if total_functional > 0:
-        updated_count = readings_today['jalmitra'].nunique() if not readings_today.empty else 0
-        absent_count = max(total_functional - updated_count, 0)
-        df_part = pd.DataFrame({"status": ["Updated","Absent"], "count": [updated_count, absent_count]})
-        fig_part = px.pie(df_part, names='status', values='count', title="Jalmitra Updates Today",
-                          color='status', color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"}, hole=0.08)
-        fig_part.update_traces(textinfo='percent+label')
-        st.plotly_chart(fig_part, use_container_width=False, width=360)
-    else:
-        st.info("No functional schemes — cannot compute participation.")
-
-# Water quantity simple table (3 columns only)
-st.markdown("---")
-st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra per Scheme (Today)")
-if not readings_today.empty:
-    simple_table = readings_today[['jalmitra','scheme_name','water_quantity']].copy()
-    simple_table.columns = ['Jalmitra','Scheme','Water Quantity (m³)']
-    st.dataframe(simple_table, height=220)
-    csv_bytes = simple_table.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Download Today's Water Table (CSV)", csv_bytes, file_name="water_quantity_today.csv", mime="text/csv")
-else:
-    st.info("No water quantity measurements to display for today.")
 
 # ---------------------------
-# Last 7 Days — Interactive Plotly Line Chart
+# Below pies: Top & Worst lists (maintain proportions & sizes)
 # ---------------------------
-st.markdown("---")
-st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
+st.subheader("🏅 Jalmitra Performance — Top & Worst (Last 7 Days)")
 start_date = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
 end_date = today
-
 last7_all, metrics_cached = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
 
 if last7_all.empty:
-    st.info("No data found for the past 7 days.")
+    st.info("No readings in the last 7 days for functional schemes. Generate demo data to see rankings.")
 else:
-    last_week_qty = last7_all.groupby(['reading_date','scheme_name'])['water_quantity'].sum().reset_index()
+    # ensure all expected jalmitras present
+    metrics_df = metrics_cached.copy()
+    expected_jalmitras = jalmitras_list if jalmitras_list else [f"JM-{i+1}" for i in range(len(schemes_df))]
+    for jm in expected_jalmitras:
+        if jm not in metrics_df['jalmitra'].values:
+            metrics_df = pd.concat([metrics_df, pd.DataFrame([{
+                'jalmitra': jm,
+                'days_updated': 0,
+                'total_water_m3': 0.0,
+                'schemes_covered': 0
+            }])], ignore_index=True)
+
+    metrics_df['days_updated'] = metrics_df['days_updated'].astype(int)
+    metrics_df['total_water_m3'] = metrics_df['total_water_m3'].astype(float)
+    metrics_df['days_norm'] = metrics_df['days_updated'] / 7.0
+    max_qty = metrics_df['total_water_m3'].max() if not metrics_df['total_water_m3'].empty else 0.0
+    metrics_df['qty_norm'] = metrics_df['total_water_m3'] / max_qty if max_qty > 0 else 0.0
+
+    # fixed 50/50 weights
+    weight_freq = 0.5
+    weight_qty = 0.5
+    metrics_df['score'] = metrics_df['days_norm'] * weight_freq + metrics_df['qty_norm'] * weight_qty
+
+    metrics_df = metrics_df.sort_values(by=['score','total_water_m3'], ascending=False).reset_index(drop=True)
+    metrics_df['Rank'] = metrics_df.index + 1
+    metrics_df['total_water_m3'] = metrics_df['total_water_m3'].round(2)
+    metrics_df['score'] = metrics_df['score'].round(3)
+
+    top_n = 10
+    top_table = metrics_df.sort_values(by='score', ascending=False).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
+    top_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
+
+    # worst_table sorted ascending so worst (lowest score) appears at top
+    worst_table = metrics_df.sort_values(by='score', ascending=True).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
+    worst_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
+
+    # Styling: Top = Greens, Worst = dark-red -> light-red
+    def style_top(df: pd.DataFrame):
+        sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
+        sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Greens')
+        sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
+        return sty
+
+    def style_worst(df: pd.DataFrame):
+        """
+        Use a custom red gradient so the first row (worst) is darkest.
+        We'll map values to colors using the 'Reds_r' colormap which is reversed Reds:
+        small values (worst scores) -> darker red; larger values -> lighter red.
+        """
+        sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
+        sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Reds_r')
+        sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
+        return sty
+
+    # layout: place Top left, Worst right, matching widths and heights
+    col_t, col_w = st.columns([1,1])
+    with col_t:
+        st.markdown("### 🟢 Top 10 Performing Jalmitras")
+        st.dataframe(style_top(top_table), height=420)
+        st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode('utf-8'), file_name="jjm_top_10.csv", mime="text/csv")
+
+    with col_w:
+        st.markdown("### 🔴 Worst 10 Performing Jalmitras")
+        st.dataframe(style_worst(worst_table), height=420)
+        st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode('utf-8'), file_name="jjm_worst_10.csv", mime="text/csv")
+
+st.markdown("---")
+
+# ---------------------------
+# 7-day line chart and rest of dashboard unchanged
+# ---------------------------
+st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
+last7_all2, metrics_cached2 = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
+
+if last7_all2.empty:
+    st.info("No readings for the last 7 days for functional schemes.")
+else:
+    last_week_qty = last7_all2.groupby(['reading_date','scheme_name'])['water_quantity'].sum().reset_index()
     pivot_chart = last_week_qty.pivot(index='reading_date', columns='scheme_name', values='water_quantity').fillna(0)
     pivot_chart = pivot_chart.sort_index()
 
@@ -315,105 +375,16 @@ else:
         fig.update_xaxes(categoryorder='array', categoryarray=sorted(plot_df['reading_date'].unique(), reverse=True))
     st.plotly_chart(fig, use_container_width=True, height=420)
 
-# ---------------------------
-# Top & Worst Jalmitra Rankings (weighted 50/50 fixed)
-# ---------------------------
 st.markdown("---")
-st.subheader("🏅 Jalmitra Performance — Top & Worst (Last 7 Days)")
-
-# Fixed weights 50/50 as requested
-weight_freq = 0.5
-weight_qty = 0.5
-
-# compute metrics (fallback if cached empty)
-if metrics_cached.empty and not last7_all.empty:
-    metrics_df = last7_all.groupby('jalmitra').agg(
-        days_updated = ('reading_date', lambda x: x.nunique()),
-        total_water_m3 = ('water_quantity', 'sum'),
-        schemes_covered = ('scheme_id', lambda x: x.nunique())
-    ).reset_index()
-else:
-    metrics_df = metrics_cached.copy()
-
-# Ensure expected jalmitras appear (JM-1..JM-N)
-expected_jalmitras = jalmitras_list if jalmitras_list else [f"JM-{i+1}" for i in range(len(schemes_df))]
-for jm in expected_jalmitras:
-    if jm not in metrics_df['jalmitra'].values:
-        metrics_df = pd.concat([metrics_df, pd.DataFrame([{
-            'jalmitra': jm,
-            'days_updated': 0,
-            'total_water_m3': 0.0,
-            'schemes_covered': 0
-        }])], ignore_index=True)
-
-metrics_df['days_updated'] = metrics_df['days_updated'].astype(int)
-metrics_df['total_water_m3'] = metrics_df['total_water_m3'].astype(float)
-metrics_df['days_norm'] = metrics_df['days_updated'] / 7.0
-max_qty = metrics_df['total_water_m3'].max() if not metrics_df['total_water_m3'].empty else 0.0
-metrics_df['qty_norm'] = metrics_df['total_water_m3'] / max_qty if max_qty > 0 else 0.0
-
-# score = weighted average (50/50 locked)
-metrics_df['score'] = metrics_df['days_norm'] * weight_freq + metrics_df['qty_norm'] * weight_qty
-
-metrics_df = metrics_df.sort_values(by=['score','total_water_m3'], ascending=False).reset_index(drop=True)
-metrics_df['Rank'] = metrics_df.index + 1
-metrics_df['total_water_m3'] = metrics_df['total_water_m3'].round(2)
-metrics_df['score'] = metrics_df['score'].round(3)
-
-top_n = 10
-top_table = metrics_df.sort_values(by='score', ascending=False).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
-top_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
-
-# worst_table: sort by score ascending so lowest (worst) first
-worst_table = metrics_df.sort_values(by='score', ascending=True).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
-worst_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
-
-# ---------------------------
-# Styling: Top = Greens, Worst = darkest red for worst → lighter for better
-# ---------------------------
-def style_top(df: pd.DataFrame):
-    sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
-    sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Greens')
-    sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
-    return sty
-
-def style_worst(df: pd.DataFrame):
-    """
-    Use reversed Reds colormap so that lower score (worse) maps to darkest red.
-    Since the worst_table is sorted ascending (worst first), we want the first rows
-    to appear darkest. background_gradient applies mapping across values, so reversing
-    the Reds colormap gives darker color to smaller numeric values.
-    """
-    sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
-    sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Reds_r')
-    sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
-    return sty
-
-col_left, col_right = st.columns(2)
-with col_left:
-    st.markdown("### 🟢 Top Performers (Best → Worse)")
-    if top_table.empty:
-        st.info("No top performers to show.")
-    else:
-        st.dataframe(style_top(top_table), height=420)
-        st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode('utf-8'), file_name="jjm_top_10.csv", mime="text/csv")
-
-with col_right:
-    st.markdown("### 🔴 Worst Performers (Worst → Better)")
-    if worst_table.empty:
-        st.info("No worst performers to show.")
-    else:
-        st.dataframe(style_worst(worst_table), height=420)
-        st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode('utf-8'), file_name="jjm_worst_10.csv", mime="text/csv")
-
-st.markdown("---")
-
-# Export snapshot (CSV downloads)
 st.subheader("Export Snapshot")
 st.markdown("Download current Schemes, Readings, and Metrics as CSVs.")
 st.download_button("Download Schemes CSV", schemes_df.to_csv(index=False).encode('utf-8'), file_name='schemes_snapshot.csv', mime='text/csv')
 st.download_button("Download Readings CSV", readings_df.to_csv(index=False).encode('utf-8'), file_name='readings_snapshot.csv', mime='text/csv')
-st.download_button("Download Metrics CSV", metrics_df.to_csv(index=False).encode('utf-8'), file_name='metrics_snapshot.csv', mime='text/csv')
+# metrics_df might be undefined if no last7_all; guard by using metrics_df if present
+try:
+    st.download_button("Download Metrics CSV", metrics_df.to_csv(index=False).encode('utf-8'), file_name='metrics_snapshot.csv', mime='text/csv')
+except Exception:
+    st.info("Metrics CSV not available (no data).")
 
 st.markdown("---")
 with st.expander("ℹ️ How ranking is computed"):
@@ -426,16 +397,5 @@ with st.expander("ℹ️ How ranking is computed"):
     - Score = 0.50 * days_norm + 0.50 * qty_norm (fixed 50/50 weighting).
     - Top table sorts by score descending; Worst table sorts by score ascending.
     """)
-
-# Deployment notes / redirect checklist
-st.markdown("---")
-st.markdown("### Deployment notes & redirect checklist")
-st.markdown("""
-If you previously saw a **redirect loop** on Streamlit Cloud, try these checks:
-1. Ensure you have no code that manipulates the URL or performs unconditional redirects on load (avoid `st.experimental_set_query_params()` loops).
-2. If you use a custom domain, temporarily remove it and confirm the default `*.streamlit.app` URL works.
-3. Check **Manage app → Logs** for errors during start-up (dependency install, permission issues).
-4. For persistence in production, consider a hosted DB (Supabase/Postgres). Session-state is ephemeral and for demos only.
-""")
 
 st.success(f"Dashboard ready. Demo data generated: {st.session_state.get('demo_generated', False)}. Data stored only for this session.")

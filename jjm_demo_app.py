@@ -1,8 +1,8 @@
 # jjm_demo_app.py
-# JJM Dashboard — Names-in-table are clickable (Top & Worst)
-# - Top/Worst tables rendered as interactive rows where NAME is a button
-# - Coloring: greens for best, reds for worst (intensity scaled)
-# - All previous features preserved (BFM table with time, S.No start=1, demo data caps, Web/Phone view)
+# JJM Dashboard — Full (restored styled tables + clickable name buttons under tables for phone-friendly taps)
+# - Styled Top/Worst DataFrames as before (greens/reds)
+# - Clickable name buttons shown below each table (horizontal on web, stacked on phone)
+# - All other features retained: SO=ROKI RAY, demo data, capped water qty, BFM readings table with time & S.No, CSV exports
 
 import streamlit as st
 import pandas as pd
@@ -11,9 +11,9 @@ import random
 import plotly.express as px
 
 # --------------------------- Page setup ---------------------------
-st.set_page_config(page_title="JJM Dashboard — Names Clickable", layout="wide")
+st.set_page_config(page_title="JJM Dashboard — Names Buttons + Styled Tables", layout="wide")
 st.title("Jal Jeevan Mission — Unified Dashboard")
-st.markdown("For Section Officer **ROKI RAY** — Tap a name to view 7-day performance.")
+st.markdown("For Section Officer **ROKI RAY** — Tap a name (buttons under the tables) to view 7-day performance.")
 st.markdown("---")
 
 # --------------------------- View mode toggle ---------------------------
@@ -45,24 +45,6 @@ def init_state():
     st.session_state.setdefault("selected_jalmitra", None)
 
 init_state()
-
-# color helpers
-def green_hex_for_value(v: float) -> str:
-    # v expected 0..1 -> map to light->dark green
-    v = max(0.0, min(1.0, v))
-    # produce hex by mixing with white
-    r = int(240 - v * 160)   # from 240 -> 80
-    g = int(255 - (1-v) * 80)  # ensure green heavy
-    b = int(240 - v * 160)
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-def red_hex_for_value(v: float) -> str:
-    # v expected 0..1 where 1 = worst (darkest red)
-    v = max(0.0, min(1.0, v))
-    r = int(255 - (1-v)*50)   # keep red strong
-    g = int(240 - v * 200)    # reduce green for darker
-    b = int(240 - v * 200)
-    return f"#{r:02x}{g:02x}{b:02x}"
 
 # --------------------------- Demo data functions ---------------------------
 def reset_session_data():
@@ -156,7 +138,7 @@ with c2:
         reset_session_data(); st.warning("🗑️ All data removed.")
 st.markdown("---")
 
-# --------------------------- Main dashboard header ---------------------------
+# --------------------------- Header ---------------------------
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
 if role != "Section Officer":
     st.header(f"{role} Dashboard — Placeholder"); st.stop()
@@ -238,7 +220,7 @@ else:
 
 st.markdown("---")
 
-# --------------------------- Compute rankings ---------------------------
+# --------------------------- Rankings and tables ---------------------------
 start_date = (today - datetime.timedelta(days=6)).isoformat()
 end_date = today_iso
 last7, metrics = compute_metrics(readings, schemes, so, start_date, end_date)
@@ -246,121 +228,84 @@ last7, metrics = compute_metrics(readings, schemes, so, start_date, end_date)
 if last7.empty:
     st.info("No readings in last 7 days.")
 else:
+    # compute score and ranking
     max_total = metrics["total_water_m3"].max() if not metrics["total_water_m3"].empty else 0.0
     metrics["score"] = 0.5 * (metrics["days_updated"]/7.0) + (0.5 * (metrics["total_water_m3"]/max_total) if max_total>0 else 0.0)
     metrics = metrics.sort_values(by=["score","total_water_m3"], ascending=False).reset_index(drop=True)
     metrics["Rank"] = metrics.index + 1
-    # deterministic illustrative Scheme Name
+
+    # assign deterministic scheme names for display
     villages = ["Rampur","Kahikuchi","Dalgaon","Guwahati","Boko","Moran","Tezpur","Sibsagar","Jorhat","Hajo"]
     rnd = random.Random(42)
     metrics["Scheme Name"] = [rnd.choice(villages) + " PWSS" for _ in range(len(metrics))]
 
-    top10 = metrics.head(10).copy()
-    worst10 = metrics.sort_values(by="score", ascending=True).head(10).copy()
+    top_table = metrics.head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","score"]].copy()
+    top_table.columns = ["Rank","Jalmitra","Scheme Name","Days Updated (last 7d)","Total Water (m³)","Score"]
 
-    # normalize score 0..1 for coloring
-    if not top10.empty:
-        top_min, top_max = top10["score"].min(), top10["score"].max()
-        top_range = top_max - top_min if top_max != top_min else 1.0
-        top10["score_norm"] = (top10["score"] - top_min) / top_range
-    else:
-        top10["score_norm"] = 0.0
-    if not worst10.empty:
-        w_min, w_max = worst10["score"].min(), worst10["score"].max()
-        w_range = w_max - w_min if w_max != w_min else 1.0
-        # for worst coloring we want 1.0 = worst (lowest score) -> invert mapping
-        worst10["score_norm_inv"] = 1.0 - ((worst10["score"] - w_min) / w_range)
-    else:
-        worst10["score_norm_inv"] = 0.0
+    worst_table = metrics.sort_values(by="score", ascending=True).head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","score"]].copy()
+    worst_table.columns = ["Rank","Jalmitra","Scheme Name","Days Updated (last 7d)","Total Water (m³)","Score"]
 
-    # --------------------------- Render interactive Top/Worst tables (names clickable) ---------------------------
-    st.markdown("### 🏅 Jalmitra Performance — Click name to toggle 7-day chart")
+    # show styled DataFrames (restores previous look)
+    col_t, col_w = st.columns([1,1])
+    with col_t:
+        st.markdown("### 🟢 Top 10 Performing Jalmitras")
+        st.dataframe(top_table.style.format({"Total Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Greens"), height=360)
+        st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode("utf-8"), "top_10_jalmitras.csv")
+    with col_w:
+        st.markdown("### 🔴 Worst 10 Performing Jalmitras")
+        st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r"), height=360)
+        st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode("utf-8"), "worst_10_jalmitras.csv")
+
+    # --------------------------- Clickable name buttons (under each table) ---------------------------
+    st.markdown("**Tap a name below to open the 7-day performance chart**")
     if view_mode == "Web View":
-        col_left, col_right = st.columns([1,1])
-        with col_left:
-            st.markdown("#### 🟢 Top 10 Performing Jalmitras")
-            # header
-            hdr_cols = st.columns([0.5,2.2,2.2,1.2,1.4,1.0])
-            hdr_cols[0].markdown("**#**")
-            hdr_cols[1].markdown("**Jalmitra**")
-            hdr_cols[2].markdown("**Scheme Name**")
-            hdr_cols[3].markdown("**Days (7d)**")
-            hdr_cols[4].markdown("**Total Water (m³)**")
-            hdr_cols[5].markdown("**Score**")
-            # rows
-            for i, r in top10.reset_index(drop=True).iterrows():
-                cols = st.columns([0.5,2.2,2.2,1.2,1.4,1.0])
-                cols[0].write(int(r["Rank"]))
-                # name button (toggle)
-                if cols[1].button(str(r["jalmitra"]), key=f"top_name_{i}_{r['jalmitra']}"):
-                    if st.session_state.get("selected_jalmitra") == r["jalmitra"]:
+        # Horizontal button rows (compact)
+        left_names = top_table["Jalmitra"].tolist()
+        right_names = worst_table["Jalmitra"].tolist()
+        # left row
+        with st.container():
+            st.markdown("**Top 10 — Tap name**")
+            cols = st.columns(len(left_names) if len(left_names)>0 else 1)
+            for i, name in enumerate(left_names):
+                if cols[i].button(name, key=f"btn_top_{i}_{name}"):
+                    # toggle selection
+                    if st.session_state.get("selected_jalmitra") == name:
                         st.session_state["selected_jalmitra"] = None
                     else:
-                        st.session_state["selected_jalmitra"] = r["jalmitra"]
-                cols[2].write(r["Scheme Name"])
-                cols[3].markdown(f"<div style='background:{green_hex_for_value(r['score_norm'])};padding:6px;border-radius:6px;text-align:center;color:#000;font-weight:600'>{int(r['days_updated'])}</div>", unsafe_allow_html=True)
-                cols[4].markdown(f"<div style='background:{green_hex_for_value(r['score_norm'])};padding:6px;border-radius:6px;text-align:right;color:#000;font-weight:600'>{r['total_water_m3']:.2f}</div>", unsafe_allow_html=True)
-                cols[5].markdown(f"<div style='background:{green_hex_for_value(r['score_norm'])};padding:6px;border-radius:6px;text-align:center;color:#000;font-weight:600'>{r['score']:.3f}</div>", unsafe_allow_html=True)
-
-        with col_right:
-            st.markdown("#### 🔴 Worst 10 Performing Jalmitras")
-            hdr_cols = st.columns([0.5,2.2,2.2,1.2,1.4,1.0])
-            hdr_cols[0].markdown("**#**")
-            hdr_cols[1].markdown("**Jalmitra**")
-            hdr_cols[2].markdown("**Scheme Name**")
-            hdr_cols[3].markdown("**Days (7d)**")
-            hdr_cols[4].markdown("**Total Water (m³)**")
-            hdr_cols[5].markdown("**Score**")
-            for i, r in worst10.reset_index(drop=True).iterrows():
-                cols = st.columns([0.5,2.2,2.2,1.2,1.4,1.0])
-                cols[0].write(int(r["Rank"]))
-                if cols[1].button(str(r["jalmitra"]), key=f"worst_name_{i}_{r['jalmitra']}"):
-                    if st.session_state.get("selected_jalmitra") == r["jalmitra"]:
+                        st.session_state["selected_jalmitra"] = name
+        # right row
+        with st.container():
+            st.markdown("**Worst 10 — Tap name**")
+            cols = st.columns(len(right_names) if len(right_names)>0 else 1)
+            for i, name in enumerate(right_names):
+                if cols[i].button(name, key=f"btn_worst_{i}_{name}"):
+                    if st.session_state.get("selected_jalmitra") == name:
                         st.session_state["selected_jalmitra"] = None
                     else:
-                        st.session_state["selected_jalmitra"] = r["jalmitra"]
-                cols[2].write(r["Scheme Name"])
-                # compute normalized inv for this row (use earlier column if present)
-                inv = r.get("score_norm_inv", 0.5)
-                cols[3].markdown(f"<div style='background:{red_hex_for_value(inv)};padding:6px;border-radius:6px;text-align:center;color:#000;font-weight:600'>{int(r['days_updated'])}</div>", unsafe_allow_html=True)
-                cols[4].markdown(f"<div style='background:{red_hex_for_value(inv)};padding:6px;border-radius:6px;text-align:right;color:#000;font-weight:600'>{r['total_water_m3']:.2f}</div>", unsafe_allow_html=True)
-                cols[5].markdown(f"<div style='background:{red_hex_for_value(inv)};padding:6px;border-radius:6px;text-align:center;color:#000;font-weight:600'>{r['score']:.3f}</div>", unsafe_allow_html=True)
-
+                        st.session_state["selected_jalmitra"] = name
     else:
-        # Phone view stacked: top then worst
-        st.markdown("#### 🟢 Top 10 Performing Jalmitras")
-        for i, r in top10.reset_index(drop=True).iterrows():
-            cols = st.columns([0.8,2.8,1.6])
-            cols[0].write(int(r["Rank"]))
-            if cols[1].button(str(r["jalmitra"]), key=f"p_top_name_{i}_{r['jalmitra']}"):
-                if st.session_state.get("selected_jalmitra") == r["jalmitra"]:
+        # Phone: stacked buttons for easy tapping
+        st.markdown("**Top 10 — Tap a name**")
+        for i, name in enumerate(top_table["Jalmitra"].tolist()):
+            if st.button(name, key=f"pbtn_top_{i}_{name}"):
+                if st.session_state.get("selected_jalmitra") == name:
                     st.session_state["selected_jalmitra"] = None
                 else:
-                    st.session_state["selected_jalmitra"] = r["jalmitra"]
-            cols[2].markdown(f"<div style='padding:6px;border-radius:6px;background:{green_hex_for_value(r['score_norm'])};text-align:center;font-weight:600'>{r['score']:.3f}</div>", unsafe_allow_html=True)
-            st.write(f"• {r['Scheme Name']} — Days: {int(r['days_updated'])} — Water: {r['total_water_m3']:.2f} m³")
-        st.markdown("#### 🔴 Worst 10 Performing Jalmitras")
-        for i, r in worst10.reset_index(drop=True).iterrows():
-            cols = st.columns([0.8,2.8,1.6])
-            cols[0].write(int(r["Rank"]))
-            if cols[1].button(str(r["jalmitra"]), key=f"p_worst_name_{i}_{r['jalmitra']}"):
-                if st.session_state.get("selected_jalmitra") == r["jalmitra"]:
+                    st.session_state["selected_jalmitra"] = name
+        st.markdown("**Worst 10 — Tap a name**")
+        for i, name in enumerate(worst_table["Jalmitra"].tolist()):
+            if st.button(name, key=f"pbtn_worst_{i}_{name}"):
+                if st.session_state.get("selected_jalmitra") == name:
                     st.session_state["selected_jalmitra"] = None
                 else:
-                    st.session_state["selected_jalmitra"] = r["jalmitra"]
-            inv = r.get("score_norm_inv", 0.5)
-            cols[2].markdown(f"<div style='padding:6px;border-radius:6px;background:{red_hex_for_value(inv)};text-align:center;font-weight:600'>{r['score']:.3f}</div>", unsafe_allow_html=True)
-            st.write(f"• {r['Scheme Name']} — Days: {int(r['days_updated'])} — Water: {r['total_water_m3']:.2f} m³")
+                    st.session_state["selected_jalmitra"] = name
 
-    # downloads
-    st.download_button("⬇️ Download Top 10 CSV", top10.to_csv(index=False).encode("utf-8"), "top_10_jalmitras.csv")
-    st.download_button("⬇️ Download Worst 10 CSV", worst10.to_csv(index=False).encode("utf-8"), "worst_10_jalmitras.csv")
-
-# --------------------------- Show 7-day chart directly under the tables when a name is clicked ---------------------------
+# --------------------------- Show 7-day chart when a name is selected ---------------------------
 if st.session_state.get("selected_jalmitra"):
     jm = st.session_state["selected_jalmitra"]
     st.markdown("---")
     st.subheader(f"7-day Performance — {jm}")
+    # ensure last7 available
     if 'last7' not in locals() or last7 is None:
         last7, _ = compute_metrics(readings, schemes, so, start_date, end_date) if ('start_date' in locals() and 'end_date' in locals()) else compute_metrics(readings, schemes, so, (today - datetime.timedelta(days=6)).isoformat(), today_iso)
     jm_data = last7[last7["jalmitra"] == jm] if (not last7.empty) else pd.DataFrame()
@@ -375,6 +320,7 @@ if st.session_state.get("selected_jalmitra"):
                      title=f"{jm} — Daily Water Supplied (Last 7 Days)")
         st.plotly_chart(fig, use_container_width=True, height=380)
         st.markdown(f"**Total (7 days):** {daily['water_quantity'].sum():.2f} m³  **Days Updated:** {(daily['water_quantity']>0).sum()}/7")
+    # close button
     if view_mode == "Web View":
         if st.button("Close 7-day View"):
             st.session_state["selected_jalmitra"] = None
@@ -384,7 +330,7 @@ if st.session_state.get("selected_jalmitra"):
 
 st.markdown("---")
 
-# --------------------------- BFM Readings Updated Today (with reading_time) ---------------------------
+# --------------------------- BFM Readings Updated Today ---------------------------
 st.subheader("📅 BFM Readings Updated Today")
 if today_upd.empty:
     st.info("No BFM readings recorded today.")
@@ -417,7 +363,6 @@ else:
     daily_bfm = daily_bfm.sort_values("Jalmitra").reset_index(drop=True)
     daily_bfm.insert(0, "S.No", range(1, len(daily_bfm)+1))
 
-    # show table (styled)
     try:
         sty = daily_bfm.style.format({"Water Quantity (m³)":"{:.2f}"})
         st.dataframe(sty.background_gradient(cmap="Blues", subset=["Water Quantity (m³)"]), height=360)

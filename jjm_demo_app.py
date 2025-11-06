@@ -1,27 +1,25 @@
 # jjm_demo_app.py
-# Unified Streamlit app with Plotly (session-state) — Locked weights 50/50
-# - Ranking = 50% days-updated + 50% total-water (no slider)
-# - Session-state storage, Plotly chart, Top/Worst tables, CSV export.
+# Jal Jeevan Mission Dashboard — Locked 50/50 weights
+# Now with improved red gradient for Worst Performers table.
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime
 import random
-import io
 import plotly.express as px
 from typing import Tuple
 
 # ---------------------------
 # Page config
 # ---------------------------
-st.set_page_config(page_title="JJM Unified Dashboard (Weighted 50/50)", layout="wide")
+st.set_page_config(page_title="JJM Dashboard — 50/50 Weighted Ranking", layout="wide")
 try:
     st.image("logo.jpg", width=160)
 except Exception:
     pass
 st.title("Jal Jeevan Mission — Unified Dashboard")
-st.markdown("Ranking uses equal weights: 50% frequency (days updated) + 50% quantity (total water).")
+st.markdown("Ranking uses equal weights: **50% Frequency (Days Updated)** + **50% Quantity (Total Water)**.")
 st.markdown("---")
 
 # ---------------------------
@@ -42,8 +40,6 @@ def init_state():
         st.session_state["next_reading_id"] = 1
     if "demo_generated" not in st.session_state:
         st.session_state["demo_generated"] = False
-    if "generating" not in st.session_state:
-        st.session_state["generating"] = False
 
 init_state()
 
@@ -59,26 +55,19 @@ def reset_session_data():
     st.session_state["next_scheme_id"] = 1
     st.session_state["next_reading_id"] = 1
     st.session_state["demo_generated"] = False
-    st.session_state["generating"] = False
 
 def generate_demo_data(total_schemes: int = 20, so_name: str = "SO-Guwahati"):
-    """
-    Populate st.session_state with demo schemes and readings (functional schemes only).
-    Uses a fixed internal per-day update probability (85%).
-    """
-    FIXED_UPDATE_PROB = 0.85  # fixed internal probability
+    FIXED_UPDATE_PROB = 0.85
     schemes_rows = []
     jalmitras = [f"JM-{i+1}" for i in range(total_schemes)]
     today = datetime.date.today()
     reading_samples = [110010, 215870, 150340, 189420, 200015, 234870]
 
-    # Insert schemes
     for i in range(total_schemes):
         scheme_name = f"Scheme {chr(65 + (i % 26))}{'' if i < 26 else i//26}"
         functionality = random.choice(["Functional", "Non-Functional"])
-        scheme_id = st.session_state["next_scheme_id"]
         schemes_rows.append({
-            "id": scheme_id,
+            "id": st.session_state["next_scheme_id"],
             "scheme_name": scheme_name,
             "functionality": functionality,
             "so_name": so_name
@@ -88,9 +77,8 @@ def generate_demo_data(total_schemes: int = 20, so_name: str = "SO-Guwahati"):
     st.session_state["schemes"] = pd.DataFrame(schemes_rows)
     st.session_state["jalmitras"] = jalmitras
 
-    # Insert readings for functional schemes only
     readings_rows = []
-    for idx, row in st.session_state["schemes"].reset_index().iterrows():
+    for idx, row in st.session_state["schemes"].iterrows():
         if row["functionality"] != "Functional":
             continue
         scheme_id = row["id"]
@@ -98,14 +86,13 @@ def generate_demo_data(total_schemes: int = 20, so_name: str = "SO-Guwahati"):
         for d in range(7):
             date = (today - datetime.timedelta(days=d)).isoformat()
             if random.random() < FIXED_UPDATE_PROB:
-                rid = st.session_state["next_reading_id"]
                 readings_rows.append({
-                    "id": rid,
+                    "id": st.session_state["next_reading_id"],
                     "scheme_id": scheme_id,
                     "jalmitra": jalmitra,
                     "reading": random.choice(reading_samples),
                     "reading_date": date,
-                    "reading_time": f"{random.randint(6,18)}:{random.choice(['00','15','30','45'])}:00",
+                    "reading_time": f"{random.randint(6,18)}:{random.choice(['00','30'])}:00",
                     "water_quantity": round(random.uniform(40.0, 350.0), 2)
                 })
                 st.session_state["next_reading_id"] += 1
@@ -114,292 +101,164 @@ def generate_demo_data(total_schemes: int = 20, so_name: str = "SO-Guwahati"):
     st.session_state["demo_generated"] = True
 
 @st.cache_data
-def compute_metrics_and_pivot(readings_df: pd.DataFrame, schemes_df: pd.DataFrame, so_name: str, start_date: str, end_date: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Compute:
-     - last7_all: merged readings for functional schemes in date window
-     - metrics: per-jalmitra metrics (days_updated, total_water_m3, schemes_covered)
-    Returns (last7_all, metrics)
-    """
+def compute_metrics(readings_df, schemes_df, so_name, start_date, end_date):
     if readings_df.empty or schemes_df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    merged = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left')
-    mask = (merged['functionality'] == 'Functional') & (merged['so_name'] == so_name) & (merged['reading_date'] >= start_date) & (merged['reading_date'] <= end_date)
-    last7_all = merged.loc[mask].copy()
+    merged = readings_df.merge(
+        schemes_df[["id", "scheme_name", "functionality", "so_name"]],
+        left_on="scheme_id", right_on="id", how="left"
+    )
+    mask = (
+        (merged["functionality"] == "Functional") &
+        (merged["so_name"] == so_name) &
+        (merged["reading_date"] >= start_date) &
+        (merged["reading_date"] <= end_date)
+    )
+    last7 = merged.loc[mask].copy()
+    if last7.empty:
+        return last7, pd.DataFrame()
 
-    if last7_all.empty:
-        return last7_all, pd.DataFrame()
-
-    metrics = last7_all.groupby('jalmitra').agg(
-        days_updated = ('reading_date', lambda x: x.nunique()),
-        total_water_m3 = ('water_quantity', 'sum'),
-        schemes_covered = ('scheme_id', lambda x: x.nunique())
+    metrics = last7.groupby("jalmitra").agg(
+        days_updated=("reading_date", lambda x: x.nunique()),
+        total_water_m3=("water_quantity", "sum")
     ).reset_index()
-
-    metrics['days_updated'] = metrics['days_updated'].astype(int)
-    metrics['total_water_m3'] = metrics['total_water_m3'].astype(float).round(2)
-    return last7_all, metrics
+    return last7, metrics
 
 # ---------------------------
-# Demo data management UI
+# Demo data section
 # ---------------------------
 st.markdown("### 🧪 Demo Data Management")
-col_g, col_r = st.columns([2,1])
+col1, col2 = st.columns(2)
 
-with col_g:
-    total_schemes = st.number_input("Total demo schemes", min_value=4, max_value=150, value=20, step=1)
-    if st.button("Generate Demo Data") and not st.session_state.get("generating", False):
-        st.session_state["generating"] = True
-        with st.spinner("Generating demo data — this may take a few seconds..."):
-            generate_demo_data(total_schemes=int(total_schemes))
-        st.session_state["generating"] = False
-        st.success("Demo data generated in session (fixed internal update probability).")
+with col1:
+    total_schemes = st.number_input("Total demo schemes", 5, 100, 20)
+    if st.button("Generate Demo Data"):
+        generate_demo_data(total_schemes)
+        st.success("✅ Demo data generated successfully!")
 
-with col_r:
+with col2:
     if st.button("Remove Demo Data"):
         reset_session_data()
-        st.warning("Session demo data cleared.")
+        st.warning("🗑️ Demo data cleared successfully!")
 
 st.markdown("---")
 
 # ---------------------------
-# Role selection & placeholders
+# Dashboard
 # ---------------------------
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
-if role == "Assistant Executive Engineer":
-    st.header("Assistant Executive Engineer (AEE) — Placeholder")
-    st.info("AEE view is a placeholder. Tell me if you want the AEE view adapted.")
-    st.stop()
-if role == "Executive Engineer":
-    st.header("Executive Engineer (EE) — Placeholder")
-    st.info("EE view is a placeholder. Tell me if you want the EE view adapted.")
+if role != "Section Officer":
+    st.info("Currently active for Section Officer role only.")
     st.stop()
 
-# ---------------------------
-# Section Officer Dashboard
-# ---------------------------
 st.header("Section Officer Dashboard")
 so_name = "SO-Guwahati"
-
-schemes_df = st.session_state['schemes'].copy()
-readings_df = st.session_state['readings'].copy()
-jalmitras_list = st.session_state['jalmitras']
+schemes_df = st.session_state["schemes"]
+readings_df = st.session_state["readings"]
+jalmitras = st.session_state["jalmitras"]
 
 if schemes_df.empty:
-    st.info("No schemes found in this session. Use 'Generate Demo Data' to populate the dashboard.")
+    st.info("No data. Generate demo data first.")
     st.stop()
 
-# Overview pie (functional vs non-functional)
-if st.session_state.get("demo_generated", False):
-    st.subheader("📊 Scheme Functionality")
-    func_counts = schemes_df['functionality'].value_counts()
-    fig_pie = px.pie(names=func_counts.index, values=func_counts.values, title="Functional vs Non-Functional", hole=0.15,
-                     color=func_counts.index, color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"})
-    st.plotly_chart(fig_pie, use_container_width=False, width=360)
+# Pie Chart
+func_counts = schemes_df["functionality"].value_counts()
+fig_pie = px.pie(
+    names=func_counts.index,
+    values=func_counts.values,
+    title="Scheme Functionality",
+    color=func_counts.index,
+    color_discrete_map={"Functional": "#4CAF50", "Non-Functional": "#F44336"}
+)
+st.plotly_chart(fig_pie, use_container_width=False, width=350)
 
-st.markdown("---")
-st.subheader("All Schemes under SO")
-st.dataframe(schemes_df, height=220)
-
-st.subheader("Functional Schemes under SO")
-functional_schemes = schemes_df[schemes_df['functionality'] == "Functional"]
-if functional_schemes.empty:
-    st.info("No functional schemes found under this SO.")
-else:
-    st.dataframe(functional_schemes, height=220)
-
-# ---------------------------
-# Today's readings (Functional only)
-# ---------------------------
+# Today's readings
 today = datetime.date.today().isoformat()
 st.markdown("---")
-st.subheader("BFM Readings by Jalmitras Today (Functional schemes)")
+st.subheader("📅 Today's Readings (Functional Schemes Only)")
 
-if readings_df.empty:
-    st.info("No readings found. Generate demo data to create example readings.")
+merged_today = readings_df.merge(
+    schemes_df[["id", "scheme_name", "functionality", "so_name"]],
+    left_on="scheme_id", right_on="id", how="left"
+)
+readings_today = merged_today[
+    (merged_today["reading_date"] == today) &
+    (merged_today["functionality"] == "Functional")
+][["scheme_name", "jalmitra", "reading", "reading_time", "water_quantity"]]
+
+if readings_today.empty:
+    st.info("No readings for today.")
 else:
-    merged_today = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left')
-    readings_today = merged_today[
-        (merged_today['functionality'] == 'Functional') &
-        (merged_today['so_name'] == so_name) &
-        (merged_today['reading_date'] == today)
-    ][['scheme_name','jalmitra','reading','reading_time','water_quantity']]
-
-    st.write(f"Total readings recorded today: **{len(readings_today)}**")
-    if not readings_today.empty:
-        st.dataframe(readings_today, height=220)
-    else:
-        st.info("No readings recorded today for functional schemes.")
-
-    # Jalmitra participation pie chart (Updated vs Absent)
-    total_functional = len(functional_schemes)
-    if total_functional > 0:
-        updated_count = readings_today['jalmitra'].nunique() if not readings_today.empty else 0
-        absent_count = max(total_functional - updated_count, 0)
-        df_part = pd.DataFrame({
-            "status": ["Updated", "Absent"],
-            "count": [updated_count, absent_count]
-        })
-        fig_part = px.pie(df_part, names='status', values='count', title="Jalmitra Updates Today",
-                          color='status', color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"},
-                          hole=0.08)
-        fig_part.update_traces(textinfo='percent+label')
-        st.plotly_chart(fig_part, use_container_width=False, width=360)
-    else:
-        st.info("No functional schemes — cannot compute participation.")
-
-# Water quantity simple table (3 columns)
-st.markdown("---")
-st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra per Scheme (Today)")
-if not readings_today.empty:
-    simple_table = readings_today[['jalmitra','scheme_name','water_quantity']].copy()
-    simple_table.columns = ['Jalmitra','Scheme','Water Quantity (m³)']
-    st.dataframe(simple_table, height=220)
-    csv_bytes = simple_table.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Download Today's Water Table (CSV)", csv_bytes, file_name="water_quantity_today.csv", mime="text/csv")
-else:
-    st.info("No water quantity measurements to display for today.")
+    st.dataframe(readings_today)
 
 # ---------------------------
-# Last 7 Days — Interactive Plotly Line Chart
+# 7-day Summary + Rankings
 # ---------------------------
 st.markdown("---")
-st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
+st.subheader("🏅 Jalmitra Performance — Last 7 Days")
 
 start_date = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
 end_date = today
+last7, metrics = compute_metrics(readings_df, schemes_df, so_name, start_date, end_date)
 
-last7_all, metrics_cached = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
+if metrics.empty:
+    st.info("No data for last 7 days.")
+    st.stop()
 
-if last7_all.empty:
-    st.info("No readings for the last 7 days for functional schemes.")
-else:
-    last_week_qty = last7_all.groupby(['reading_date','scheme_name'])['water_quantity'].sum().reset_index()
-    pivot_chart = last_week_qty.pivot(index='reading_date', columns='scheme_name', values='water_quantity').fillna(0)
-    pivot_chart = pivot_chart.sort_index()
-
-    st.markdown("**Chart options**")
-    colc1, colc2 = st.columns([2,1])
-    with colc1:
-        show_total = st.checkbox("Also show total (sum of all functional schemes)", value=True)
-        top_k = st.selectbox("Show top N schemes by total water (last 7 days) or 'All'", options=["All","Top 5","Top 10","Top 15"], index=1)
-    with colc2:
-        date_order = st.radio("Date order", options=["Ascending","Descending"], index=0)
-
-    scheme_sums = last_week_qty.groupby('scheme_name')['water_quantity'].sum().sort_values(ascending=False)
-    if top_k == "All":
-        selected_schemes = scheme_sums.index.tolist()
-    else:
-        k = int(top_k.split()[1])
-        selected_schemes = scheme_sums.head(k).index.tolist()
-
-    plot_df = last_week_qty[last_week_qty['scheme_name'].isin(selected_schemes)].copy()
-    if show_total:
-        total_df = last_week_qty.groupby('reading_date')['water_quantity'].sum().reset_index()
-        total_df['scheme_name'] = 'Total (all)'
-        plot_df = pd.concat([plot_df, total_df], ignore_index=True)
-
-    fig = px.line(plot_df, x='reading_date', y='water_quantity', color='scheme_name',
-                  labels={'reading_date': 'Date', 'water_quantity': 'Water (m³)', 'scheme_name': 'Scheme'},
-                  markers=True, title="Water Supplied (m³) — last 7 days")
-    fig.update_layout(legend_title_text='Scheme / Total')
-    if date_order == "Descending":
-        fig.update_xaxes(categoryorder='array', categoryarray=sorted(plot_df['reading_date'].unique(), reverse=True))
-    st.plotly_chart(fig, use_container_width=True, height=420)
-
-# ---------------------------
-# Top / Worst Jalmitra Rankings (Last 7 days) — 50/50 fixed weights
-# ---------------------------
-st.markdown("---")
-st.subheader("🏅 Jalmitra Performance Rankings (Last 7 Days) — 50% Frequency + 50% Quantity")
-
-# Fixed weights
-weight_freq = 0.5
-weight_qty = 0.5
-
-if metrics_cached.empty and not last7_all.empty:
-    metrics_df = last7_all.groupby('jalmitra').agg(
-        days_updated = ('reading_date', lambda x: x.nunique()),
-        total_water_m3 = ('water_quantity', 'sum'),
-        schemes_covered = ('scheme_id', lambda x: x.nunique())
-    ).reset_index()
-else:
-    metrics_df = metrics_cached.copy()
-
-expected_jalmitras = jalmitras_list if jalmitras_list else [f"JM-{i+1}" for i in range(len(schemes_df))]
-for jm in expected_jalmitras:
-    if jm not in metrics_df['jalmitra'].values:
-        metrics_df = pd.concat([metrics_df, pd.DataFrame([{
-            'jalmitra': jm,
-            'days_updated': 0,
-            'total_water_m3': 0.0,
-            'schemes_covered': 0
+# Fill missing Jalmitras with zeros
+for jm in jalmitras:
+    if jm not in metrics["jalmitra"].values:
+        metrics = pd.concat([metrics, pd.DataFrame([{
+            "jalmitra": jm,
+            "days_updated": 0,
+            "total_water_m3": 0.0
         }])], ignore_index=True)
 
-metrics_df['days_updated'] = metrics_df['days_updated'].astype(int)
-metrics_df['total_water_m3'] = metrics_df['total_water_m3'].astype(float)
-metrics_df['days_norm'] = metrics_df['days_updated'] / 7.0
-max_qty = metrics_df['total_water_m3'].max() if not metrics_df['total_water_m3'].empty else 0.0
-metrics_df['qty_norm'] = metrics_df['total_water_m3'] / max_qty if max_qty > 0 else 0.0
+metrics["days_norm"] = metrics["days_updated"] / 7
+max_qty = metrics["total_water_m3"].max()
+metrics["qty_norm"] = metrics["total_water_m3"] / max_qty if max_qty > 0 else 0
+metrics["score"] = 0.5 * metrics["days_norm"] + 0.5 * metrics["qty_norm"]
 
-# Weighted score (50/50)
-metrics_df['score'] = metrics_df['days_norm'] * weight_freq + metrics_df['qty_norm'] * weight_qty
+metrics = metrics.sort_values(by=["score", "total_water_m3"], ascending=False).reset_index(drop=True)
+metrics["Rank"] = metrics.index + 1
+metrics["score"] = metrics["score"].round(3)
 
-metrics_df = metrics_df.sort_values(by=['score','total_water_m3'], ascending=False).reset_index(drop=True)
-metrics_df['Rank'] = metrics_df.index + 1
-metrics_df['total_water_m3'] = metrics_df['total_water_m3'].round(2)
-metrics_df['score'] = metrics_df['score'].round(3)
+top10 = metrics.head(10).copy()
+worst10 = metrics.tail(10).copy().sort_values(by="score", ascending=True)
 
-top_n = 10
-top_table = metrics_df.sort_values(by='score', ascending=False).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
-top_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
-
-worst_table = metrics_df.sort_values(by='score', ascending=True).head(top_n)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
-worst_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
-
-def style_top(df: pd.DataFrame):
-    sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
-    sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Greens')
-    sty = sty.set_table_styles([{'selector':'th','props':[('font-weight','600')]}])
+# ---------------------------
+# Styling
+# ---------------------------
+def style_top(df):
+    sty = df.style.format({"total_water_m3": "{:,.2f}", "score": "{:.3f}"})
+    sty = sty.background_gradient(subset=["days_updated", "total_water_m3", "score"], cmap="Greens")
     return sty
 
-def style_worst(df: pd.DataFrame):
-    sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
-    sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Reds')
-    sty = sty.set_table_styles([{'selector':'th','props':[('font-weight','600')]}])
+def style_worst(df):
+    sty = df.style.format({"total_water_m3": "{:,.2f}", "score": "{:.3f}"})
+    # Use a darker red at the bottom (lowest score)
+    sty = sty.background_gradient(
+        subset=["days_updated", "total_water_m3", "score"],
+        cmap="Reds_r"  # reversed Reds — darkest for worst
+    )
     return sty
 
-colt, colb = st.columns(2)
-with colt:
-    st.markdown("### 🟢 Top Performers (Best → Worst)")
-    if top_table.empty:
-        st.info("No top performers to show.")
-    else:
-        st.dataframe(style_top(top_table), height=420)
-        csv_top = top_table.to_csv(index=False).encode('utf-8')
-        st.download_button("⬇️ Download Top 10 CSV", csv_top, file_name="jjm_top_10.csv", mime="text/csv")
+# ---------------------------
+# Display Top & Worst Tables
+# ---------------------------
+col1, col2 = st.columns(2)
+with col1:
+    st.markdown("### 🟢 Top 10 Performing Jalmitras")
+    st.dataframe(style_top(top10), height=420)
 
-with colb:
-    st.markdown("### 🔴 Worst Performers (Worst → Better)")
-    if worst_table.empty:
-        st.info("No worst performers to show.")
-    else:
-        st.dataframe(style_worst(worst_table), height=420)
-        csv_worst = worst_table.to_csv(index=False).encode('utf-8')
-        st.download_button("⬇️ Download Worst 10 CSV", csv_worst, file_name="jjm_worst_10.csv", mime="text/csv")
+with col2:
+    st.markdown("### 🔴 Worst 10 Performing Jalmitras")
+    st.dataframe(style_worst(worst10), height=420)
 
 st.markdown("---")
-with st.expander("ℹ️ How ranking is computed (click to expand)"):
-    st.markdown(f"""
-    - **Days Updated (last 7d)** — distinct days with at least one reading (0–7).
-    - **Total Water (m³)** — cumulative water_quantity for the last 7 days.
-    - Normalized:
-      - `days_norm = days_updated / 7`
-      - `qty_norm = total_water / max_total_water`
-    - **Score = 0.50 * days_norm + 0.50 * qty_norm**
-    - Top table sorts by score descending; Worst table sorts by score ascending.
-    """)
-
-st.markdown("---")
-st.success(f"Dashboard ready. Demo data generated: {st.session_state.get('demo_generated', False)}. Data stored only for this session.")
+st.markdown("""
+**Scoring Formula:**
+> Score = 0.5 × (Days Updated / 7) + 0.5 × (Total Water / Max Water)
+""")
+st.success("Dashboard ready ✅ | Demo data stored only for this session.")

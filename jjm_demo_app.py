@@ -1,11 +1,7 @@
 # jjm_demo_app.py
 # Streamlit Dashboard for Jal Jeevan Mission (JJM)
-# Section Officer — Jalmitra Performance Dashboard
-# Features:
-# - Demo data generator
-# - Ranking of Top 10 & Worst 10 Jalmitras (7-day performance)
-# - Performance = (days updated + total water supplied)
-# - Robust DB query handling with retry on lock
+# Section Officer — Jalmitra Performance Dashboard (Full working code)
+# Fixes KeyError during demo data insertion by using explicit SELECT and itertuples()
 
 import streamlit as st
 import pandas as pd
@@ -14,7 +10,6 @@ import random
 import time
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
-import matplotlib.pyplot as plt
 from sqlalchemy.pool import SingletonThreadPool
 
 # --- Streamlit Page Config ---
@@ -30,7 +25,7 @@ engine = create_engine(
     poolclass=SingletonThreadPool
 )
 
-# Create tables if not exist
+# Ensure tables exist
 with engine.connect() as conn:
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS schemes (
@@ -63,42 +58,50 @@ with col1:
         jalmitras = [f"JM-{i+1}" for i in range(20)]
 
         with engine.begin() as conn:
+            # clear previous demo data
             conn.execute(text("DELETE FROM schemes"))
             conn.execute(text("DELETE FROM bfm_readings"))
 
-            # Insert demo schemes
+            # Insert demo schemes deterministically (so insert order is preserved)
             for scheme in schemes_list:
                 functionality = random.choice(["Functional", "Non-Functional"])
                 conn.execute(text("""
                     INSERT INTO schemes (scheme_name, functionality, so_name)
-                    VALUES (:s, :f, :so)
-                """), {"s": scheme, "f": functionality, "so": so_name})
+                    VALUES (:sname, :func, :so)
+                """), {"sname": scheme, "func": functionality, "so": so_name})
 
-            # Fetch scheme IDs
-            schemes_df = pd.read_sql("SELECT * FROM schemes", conn)
+            # Fetch the schemes with explicit columns to ensure 'id' exists
+            schemes_df = pd.read_sql("SELECT id, scheme_name, functionality FROM schemes ORDER BY id ASC", conn)
 
-            # Insert demo readings for last 7 days
+            # Insert demo readings for functional schemes only
             today = datetime.date.today()
-            readings = [110010, 215870, 150340, 189420, 200015, 234870]
+            readings_sample = [110010, 215870, 150340, 189420, 200015, 234870]
 
-            for idx, row in schemes_df.iterrows():
-                if row["functionality"] == "Functional":
-                    jalmitra = jalmitras[idx % len(jalmitras)]
-                    for d in range(7):
-                        date = (today - datetime.timedelta(days=d)).isoformat()
-                        if random.random() < 0.85:  # 85% chance of update
-                            conn.execute(text("""
-                                INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
-                                VALUES (:sid, :jm, :r, :dt, :tm, :qty)
-                            """), {
-                                "sid": row["id"],
-                                "jm": jalmitra,
-                                "r": random.choice(readings),
-                                "dt": date,
-                                "tm": f"{random.randint(6,18)}:{random.choice(['00','30'])}:00",
-                                "qty": round(random.uniform(50.0, 350.0), 2)
-                            })
-        st.success("✅ Demo data generated successfully!")
+            # iterate safely using itertuples() to avoid KeyError on column names
+            for idx, row in enumerate(schemes_df.itertuples(index=False)):
+                # row has attributes: id, scheme_name, functionality
+                scheme_id = getattr(row, "id", None)
+                functionality = getattr(row, "functionality", None)
+                if functionality != "Functional":
+                    continue
+                # map scheme to a jalmitra deterministically
+                jalmitra = jalmitras[idx % len(jalmitras)]
+                for d in range(7):
+                    date = (today - datetime.timedelta(days=d)).isoformat()
+                    # simulate some missing days randomly
+                    if random.random() < 0.85:  # 85% chance of an update that day
+                        conn.execute(text("""
+                            INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
+                            VALUES (:sid, :jm, :r, :dt, :tm, :qty)
+                        """), {
+                            "sid": scheme_id,
+                            "jm": jalmitra,
+                            "r": random.choice(readings_sample),
+                            "dt": date,
+                            "tm": f"{random.randint(6,18)}:{random.choice(['00','15','30','45'])}:00",
+                            "qty": round(random.uniform(50.0, 350.0), 2)
+                        })
+        st.success("✅ Demo data generated successfully (20 schemes; up to 7 days readings).")
 
 with col2:
     if st.button("Remove Demo Data"):
@@ -112,25 +115,25 @@ st.markdown("---")
 # --- ROLE SELECTION ---
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
 if role != "Section Officer":
-    st.info("This page is for Section Officer role only.")
+    st.info("This view is for Section Officer role; switch to Section Officer to see rankings.")
     st.stop()
 
 so_name = "SO-Guwahati"
 
-# --- FETCH SCHEMES ---
+# --- FETCH SCHEMES FOR SO ---
 with engine.connect() as conn:
-    schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name=:so"), conn, params={"so": so_name})
+    schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name = :so"), conn, params={"so": so_name})
 
 if schemes.empty:
-    st.info("No schemes found. Generate demo data first.")
+    st.info("No schemes found for this SO. Generate demo data to proceed.")
     st.stop()
 
 functional_schemes = schemes[schemes["functionality"] == "Functional"]
 if functional_schemes.empty:
-    st.warning("No functional schemes found.")
+    st.info("No functional schemes found under this SO. Rankings require functional schemes with readings.")
     st.stop()
 
-# --- FETCH LAST 7 DAYS READINGS (with retry) ---
+# --- FETCH LAST 7 DAYS READINGS (robust with retries) ---
 today = datetime.date.today()
 start_date = (today - datetime.timedelta(days=6)).isoformat()
 end_date = today.isoformat()
@@ -150,83 +153,108 @@ for attempt in range(max_attempts):
     try:
         with engine.connect() as conn:
             result = conn.execute(query, {"start": start_date, "end": end_date, "so": so_name})
-            rows = result.mappings().all()
+            rows = result.mappings().all()  # list of dict-like rows
             last7 = pd.DataFrame(rows)
         break
     except OperationalError as e:
-        if "locked" in str(e).lower() and attempt < max_attempts - 1:
+        # handle transient sqlite locking
+        msg = str(e).lower()
+        if "locked" in msg and attempt < max_attempts - 1:
             time.sleep(0.5 * (attempt + 1))
             continue
         else:
-            st.error("Database query failed. Check logs for details.")
+            st.error("Database query failed. Check app logs for full details.")
             raise
 
 if last7.empty:
-    st.info("No readings recorded in last 7 days.")
+    st.info("No readings recorded in the last 7 days for functional schemes. Generate demo data or wait for updates.")
     st.stop()
 
-# --- PERFORMANCE CALCULATION ---
+# --- COMPUTE PERFORMANCE METRICS PER JALMITRA ---
 metrics = last7.groupby("jalmitra").agg(
     days_updated=("reading_date", lambda x: x.nunique()),
-    total_water=("water_quantity", "sum")
+    total_water_m3=("water_quantity", "sum"),
+    schemes_covered=("scheme_id", lambda x: x.nunique())
 ).reset_index()
 
-# Normalize & score
-metrics["days_norm"] = metrics["days_updated"] / 7
-max_qty = metrics["total_water"].max()
-metrics["qty_norm"] = metrics["total_water"] / max_qty if max_qty > 0 else 0
-weight_freq, weight_qty = 0.5, 0.5
-metrics["score"] = 0.5 * metrics["days_norm"] + 0.5 * metrics["qty_norm"]
+# Ensure numeric types
+metrics["days_updated"] = metrics["days_updated"].astype(int)
+metrics["total_water_m3"] = metrics["total_water_m3"].astype(float)
 
-# Rank
-metrics = metrics.sort_values("score", ascending=False).reset_index(drop=True)
+# --- Normalize & Score ---
+max_days = 7.0
+metrics["days_norm"] = metrics["days_updated"] / max_days
+
+max_qty = metrics["total_water_m3"].max()
+metrics["qty_norm"] = metrics["total_water_m3"] / max_qty if max_qty and max_qty > 0 else 0.0
+
+# Equal weights by default (tweakable)
+weight_freq = 0.5
+weight_qty = 0.5
+metrics["score"] = metrics["days_norm"] * weight_freq + metrics["qty_norm"] * weight_qty
+
+# --- Rank & Format ---
+metrics = metrics.sort_values(by=["score", "total_water_m3"], ascending=False).reset_index(drop=True)
 metrics["Rank"] = metrics.index + 1
-metrics["total_water"] = metrics["total_water"].round(2)
+metrics["total_water_m3"] = metrics["total_water_m3"].round(2)
 metrics["score"] = metrics["score"].round(3)
 
-# --- TOP & WORST 10 ---
+# --- Prepare Top and Worst tables (10 each) ---
 top_n = 10
-top_table = metrics.head(top_n).copy()
-worst_table = metrics.tail(top_n).sort_values("score", ascending=True).copy()
+top_table = metrics.sort_values(by="score", ascending=False).head(top_n)[["Rank", "jalmitra", "days_updated", "total_water_m3", "score"]].copy()
+top_table.columns = ["Rank", "Jalmitra", "Days Updated (last 7d)", "Total Water (m³)", "Score"]
 
-top_table.columns = ["Jalmitra", "Days Updated", "Total Water (m³)", "Days Norm", "Qty Norm", "Score", "Rank"]
-worst_table.columns = ["Jalmitra", "Days Updated", "Total Water (m³)", "Days Norm", "Qty Norm", "Score", "Rank"]
+worst_table = metrics.sort_values(by="score", ascending=True).head(top_n)[["Rank", "jalmitra", "days_updated", "total_water_m3", "score"]].copy()
+worst_table.columns = ["Rank", "Jalmitra", "Days Updated (last 7d)", "Total Water (m³)", "Score"]
 
-# --- STYLING ---
-def style_table(df, color):
-    cmap = "Greens" if color == "green" else "Reds"
-    return (
-        df.style
-        .background_gradient(subset=["Days Updated", "Total Water (m³)", "Score"], cmap=cmap)
-        .format({"Total Water (m³)": "{:,.2f}", "Score": "{:.3f}"})
-        .set_table_styles([{"selector": "th", "props": [("font-weight", "600")]}])
-    )
+# --- Styling helpers ---
+def style_top(df: pd.DataFrame):
+    sty = df.style.format({
+        'Total Water (m³)': '{:,.2f}',
+        'Score': '{:.3f}'
+    })
+    sty = sty.background_gradient(subset=['Days Updated (last 7d)', 'Total Water (m³)', 'Score'], cmap='Greens')
+    sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
+    return sty
 
-# --- DISPLAY ---
-st.header(f"📊 Jalmitra Performance Ranking (Last 7 Days) — {so_name}")
-col1, col2 = st.columns(2)
+def style_worst(df: pd.DataFrame):
+    sty = df.style.format({
+        'Total Water (m³)': '{:,.2f}',
+        'Score': '{:.3f}'
+    })
+    sty = sty.background_gradient(subset=['Days Updated (last 7d)', 'Total Water (m³)', 'Score'], cmap='Reds')
+    sty = sty.set_table_styles([{'selector': 'th', 'props': [('font-weight', '600')]}])
+    return sty
 
-with col1:
-    st.markdown("### 🟢 Top Performing Jalmitras")
-    st.dataframe(style_table(top_table[["Rank", "Jalmitra", "Days Updated", "Total Water (m³)", "Score"]], "green"), height=420)
-    st.download_button("⬇️ Download Top 10", top_table.to_csv(index=False), "top_jalmitras.csv")
+# --- Display side-by-side ---
+st.subheader(f"Top {top_n} Performers vs Worst {top_n} (Last 7 Days) — SO: {so_name}")
+col_left, col_right = st.columns(2)
 
-with col2:
-    st.markdown("### 🔴 Worst Performing Jalmitras")
-    st.dataframe(style_table(worst_table[["Rank", "Jalmitra", "Days Updated", "Total Water (m³)", "Score"]], "red"), height=420)
-    st.download_button("⬇️ Download Worst 10", worst_table.to_csv(index=False), "worst_jalmitras.csv")
+with col_left:
+    st.markdown("### 🟢 Top Performers (Best → Worst)")
+    if top_table.empty:
+        st.info("No top performers to show.")
+    else:
+        st.dataframe(style_top(top_table), height=420)
+    st.download_button("Download Top as CSV", top_table.to_csv(index=False), file_name="jjm_top_jalmitras.csv", mime="text/csv")
+
+with col_right:
+    st.markdown("### 🔴 Worst Performers (Worst → Better)")
+    if worst_table.empty:
+        st.info("No worst performers to show.")
+    else:
+        st.dataframe(style_worst(worst_table), height=420)
+    st.download_button("Download Worst as CSV", worst_table.to_csv(index=False), file_name="jjm_worst_jalmitras.csv", mime="text/csv")
 
 st.markdown("---")
-with st.expander("ℹ️ How the Ranking Works"):
+with st.expander("How ranking is computed"):
     st.markdown("""
-    **Performance Score Formula:**
-    ```
-    score = 0.5 * (days_updated / 7) + 0.5 * (total_water / max_total_water)
-    ```
-    - Equal weight to both *frequency* and *quantity*  
-    - Ranks are based on score (higher = better)
-    - Tables show **Top 10 (green)** and **Bottom 10 (red)**
+    - **Days Updated (last 7d)**: number of distinct days (0–7) where a Jalmitra submitted at least one reading.
+    - **Total Water (m³)**: cumulative water_quantity over the last 7 days.
+    - Normalize both metrics to [0,1], then compute:
+      `score = 0.5 * days_norm + 0.5 * qty_norm`
+    - Sort descending for Top performers; ascending for Worst performers.
+    - Change weights `weight_freq` / `weight_qty` in the code to tweak importance.
     """)
 
-st.success(f"Rankings generated for last 7 days ({start_date} → {end_date}).")
-
+st.success(f"Rankings computed for last 7 days ({start_date} → {end_date}).")

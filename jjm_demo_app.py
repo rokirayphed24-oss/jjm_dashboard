@@ -1,6 +1,6 @@
 # jjm_demo_app.py
 # Unified Streamlit app — Overview layout updated (7-day chart removed)
-# - Left: Scheme Functionality pie
+# - Left: Scheme Functionality (Today) pie
 # - Right: Jalmitra Updates pie (today)
 # - Below those pies: Top 10 (green) and Worst 10 (red; darkest red for worst)
 # - Session-state storage, CSV export, etc.
@@ -317,3 +317,4 @@ except Exception:
     st.info("Metrics CSV not available (no data).")
 
 st.success(f"Dashboard ready for SO: {so_name}. Demo data generated: {st.session_state.get('demo_generated', False)} ✅")
+

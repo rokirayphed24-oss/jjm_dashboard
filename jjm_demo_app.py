@@ -1,6 +1,6 @@
 # jjm_demo_app.py
 # JJM Dashboard — Full version:
-# Styled Top/Worst tables, clickable “View” charts, and “📅 BFM Readings Updated Today” table.
+# Styled Top/Worst tables, clickable “View” charts, and “📅 BFM Readings Updated Today” showing scheme_name per jalmitra.
 
 import streamlit as st
 import pandas as pd
@@ -25,19 +25,27 @@ def ensure_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     return df
 
 def init_state():
-    for k, v in {
-        "schemes": pd.DataFrame(columns=["id","scheme_name","functionality","so_name"]),
-        "readings": pd.DataFrame(columns=[
-            "id","scheme_id","jalmitra","reading","reading_date","reading_time","water_quantity","scheme_name"]),
-        "jalmitras": [], "next_scheme_id": 1, "next_reading_id": 1,
-        "demo_generated": False, "selected_jalmitra": None
-    }.items(): st.session_state.setdefault(k, v)
+    st.session_state.setdefault("schemes", pd.DataFrame(columns=["id","scheme_name","functionality","so_name"]))
+    st.session_state.setdefault("readings", pd.DataFrame(columns=[
+        "id","scheme_id","jalmitra","reading","reading_date","reading_time","water_quantity","scheme_name"]))
+    st.session_state.setdefault("jalmitras", [])
+    st.session_state.setdefault("next_scheme_id", 1)
+    st.session_state.setdefault("next_reading_id", 1)
+    st.session_state.setdefault("demo_generated", False)
+    st.session_state.setdefault("selected_jalmitra", None)
+
 init_state()
 
 # ---------------------------  Demo data generator  ---------------------------
 def reset_session_data():
-    for key in ["schemes","readings","jalmitras"]: st.session_state[key] = [] if key=="jalmitras" else pd.DataFrame()
-    st.session_state.update({"next_scheme_id":1,"next_reading_id":1,"demo_generated":False,"selected_jalmitra":None})
+    st.session_state["schemes"] = pd.DataFrame(columns=["id","scheme_name","functionality","so_name"])
+    st.session_state["readings"] = pd.DataFrame(columns=[
+        "id","scheme_id","jalmitra","reading","reading_date","reading_time","water_quantity","scheme_name"])
+    st.session_state["jalmitras"] = []
+    st.session_state["next_scheme_id"] = 1
+    st.session_state["next_reading_id"] = 1
+    st.session_state["demo_generated"] = False
+    st.session_state["selected_jalmitra"] = None
 
 def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
     FIXED_UPDATE_PROB=0.85
@@ -49,9 +57,9 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
               "Jorhat","Hajo","Tihu","Kokrajhar","Nalbari","Barpeta","Rangia","Goalpara","Dhemaji",
               "Dibrugarh","Mariani","Sonari"]
     today=datetime.date.today(); readings=[]
-    schemes=[{"id":i+1,"scheme_name":f"Scheme {chr(65+i)}",
-              "functionality":random.choice(["Functional","Non-Functional"]),
-              "so_name":so_name} for i in range(total_schemes)]
+    schemes=[]
+    for i in range(total_schemes):
+        schemes.append({"id":i+1,"scheme_name":f"Scheme {chr(65+i)}","functionality":random.choice(["Functional","Non-Functional"]),"so_name":so_name})
     for i,s in enumerate(schemes):
         if s["functionality"]!="Functional": continue
         jm=jalmitras[i%len(jalmitras)]; label=random.choice(villages)+" PWSS"
@@ -63,9 +71,10 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
                     "reading_date":(today-datetime.timedelta(days=d)).isoformat(),
                     "reading_time":f"{random.randint(6,18)}:{random.choice(['00','15','30','45'])}:00",
                     "water_quantity":round(random.uniform(40,350),2),"scheme_name":label})
-    st.session_state.update({
-        "schemes":pd.DataFrame(schemes),"readings":pd.DataFrame(readings),
-        "jalmitras":jalmitras,"demo_generated":True})
+    st.session_state["schemes"]=pd.DataFrame(schemes)
+    st.session_state["readings"]=pd.DataFrame(readings)
+    st.session_state["jalmitras"]=jalmitras
+    st.session_state["demo_generated"]=True
     st.success("✅ Demo data generated for ROKI RAY.")
 
 # ---------------------------  Compute metrics  ---------------------------
@@ -75,7 +84,7 @@ def compute_metrics(readings,schemes,so,start,end):
     s=ensure_columns(schemes.copy(),["id","scheme_name","functionality","so_name"])
     m=r.merge(s[["id","scheme_name","functionality","so_name"]],left_on="scheme_id",right_on="id",how="left")
     mask=(m["functionality"]=="Functional")&(m["so_name"]==so)&(m["reading_date"]>=start)&(m["reading_date"]<=end)
-    last7=m.loc[mask]
+    last7=m.loc[mask].copy()
     if last7.empty: return last7,pd.DataFrame()
     metrics=(last7.groupby("jalmitra")
              .agg(days_updated=("reading_date",lambda x:x.nunique()),total_water_m3=("water_quantity","sum"))
@@ -106,10 +115,8 @@ if schemes.empty: st.info("Generate demo data first."); st.stop()
 # ---------------------------  Pies  ---------------------------
 func=schemes["functionality"].value_counts()
 today_iso=today.isoformat()
-merged=readings.merge(schemes[["id","scheme_name","functionality","so_name"]],
-                      left_on="scheme_id",right_on="id",how="left")
-today_upd=merged[(merged["reading_date"]==today_iso)&
-                 (merged["functionality"]=="Functional")&(merged["so_name"]==so)]
+merged=readings.merge(schemes[["id","scheme_name","functionality","so_name"]],left_on="scheme_id",right_on="id",how="left")
+today_upd=merged[(merged["reading_date"]==today_iso)&(merged["functionality"]=="Functional")&(merged["so_name"]==so)]
 upd=len(today_upd["jalmitra"].unique())
 func_total=len(schemes[schemes["functionality"]=="Functional"])
 absent=max(func_total-upd,0)
@@ -129,42 +136,44 @@ st.markdown("---")
 # ---------------------------  Top/Worst + View  ---------------------------
 start=(today-datetime.timedelta(days=6)).isoformat(); end=today_iso
 last7,metrics=compute_metrics(readings,schemes,so,start,end)
-if last7.empty: st.info("No readings in last 7 days.")
+if last7.empty:
+    st.info("No readings in last 7 days.")
 else:
     metrics["score"]=0.5*(metrics["days_updated"]/7)+0.5*(metrics["total_water_m3"]/metrics["total_water_m3"].max())
     metrics=metrics.sort_values("score",ascending=False).reset_index(drop=True); metrics["Rank"]=metrics.index+1
     villages=["Rampur","Kahikuchi","Dalgaon","Guwahati","Boko","Moran","Tezpur","Sibsagar","Jorhat","Hajo"]
     metrics["Scheme Name"]=[random.choice(villages)+" PWSS" for _ in range(len(metrics))]
-    top10=metrics.head(10).copy(); worst10=metrics.tail(10).sort_values("score")
+    top10=metrics.head(10).copy(); worst10=metrics.sort_values("score",ascending=True).head(10).copy()
 
     c1,c2=st.columns(2)
     with c1:
         st.markdown("### 🟢 Top 10 Jalmitras")
-        st.dataframe(top10.style.background_gradient(cmap="Greens",subset=["days_updated","total_water_m3","score"]))
+        st.dataframe(top10.style.format({"total_water_m3":"{:.2f}","score":"{:.3f}"}).background_gradient(cmap="Greens",subset=["days_updated","total_water_m3","score"]))
     with c2:
         st.markdown("### 🔴 Worst 10 Jalmitras")
-        st.dataframe(worst10.style.background_gradient(cmap="Reds_r",subset=["days_updated","total_water_m3","score"]))
+        st.dataframe(worst10.style.format({"total_water_m3":"{:.2f}","score":"{:.3f}"}).background_gradient(cmap="Reds_r",subset=["days_updated","total_water_m3","score"]))
 
     st.markdown("**Tap View to see 7-day chart**")
     c1,c2=st.columns(2)
     with c1:
         for i,r in top10.iterrows():
             cols=st.columns([0.5,1.5,2,1,1,1,0.8])
-            cols[0].write(r["Rank"]); cols[1].write(r["jalmitra"]); cols[2].write(r["Scheme Name"])
-            cols[3].write(r["days_updated"]); cols[4].write(f"{r['total_water_m3']:.1f}"); cols[5].write(f"{r['score']:.3f}")
+            cols[0].write(int(r["Rank"])); cols[1].write(r["jalmitra"]); cols[2].write(r["Scheme Name"])
+            cols[3].write(int(r["days_updated"])); cols[4].write(f"{r['total_water_m3']:.1f}"); cols[5].write(f"{r['score']:.3f}")
             if cols[6].button("View",key=f"view_top_{i}"): st.session_state["selected_jalmitra"]=r["jalmitra"]
     with c2:
         for i,r in worst10.iterrows():
             cols=st.columns([0.5,1.5,2,1,1,1,0.8])
-            cols[0].write(r["Rank"]); cols[1].write(r["jalmitra"]); cols[2].write(r["Scheme Name"])
-            cols[3].write(r["days_updated"]); cols[4].write(f"{r['total_water_m3']:.1f}"); cols[5].write(f"{r['score']:.3f}")
+            cols[0].write(int(r["Rank"])); cols[1].write(r["jalmitra"]); cols[2].write(r["Scheme Name"])
+            cols[3].write(int(r["days_updated"])); cols[4].write(f"{r['total_water_m3']:.1f}"); cols[5].write(f"{r['score']:.3f}")
             if cols[6].button("View",key=f"view_worst_{i}"): st.session_state["selected_jalmitra"]=r["jalmitra"]
 
 # ---------------------------  View chart  ---------------------------
 if st.session_state.get("selected_jalmitra"):
     jm=st.session_state["selected_jalmitra"]; st.markdown("---"); st.subheader(f"7-day Performance — {jm}")
-    jm_data=last7[last7["jalmitra"]==jm]
-    if jm_data.empty: st.info("No readings for this Jalmitra.")
+    jm_data=last7[last7["jalmitra"]==jm] if not last7.empty else pd.DataFrame()
+    if jm_data.empty:
+        st.info("No readings for this Jalmitra.")
     else:
         dates=[(today-datetime.timedelta(days=d)).isoformat() for d in reversed(range(7))]
         daily=jm_data.groupby("reading_date")["water_quantity"].sum().reindex(dates,fill_value=0).reset_index()
@@ -177,23 +186,37 @@ if st.session_state.get("selected_jalmitra"):
 
 # ---------------------------  NEW — Daily BFM Readings  ---------------------------
 st.markdown("---"); st.subheader("📅 BFM Readings Updated Today")
+# if there are readings today (today_upd), pick the most recent reading per jalmitra (by reading_time) and show scheme_name assigned in readings
 if today_upd.empty:
     st.info("No BFM readings recorded today.")
 else:
-    # ensure all required columns exist
-    for c in ["jalmitra","scheme_name","reading","water_quantity"]:
-        if c not in today_upd.columns: today_upd[c]=""
-    daily=today_upd[["jalmitra","scheme_name","reading","water_quantity"]].copy()
-    daily.columns=["Jalmitra","Scheme Name","BFM Reading","Water Quantity (m³)"]
-    daily=daily.sort_values("Jalmitra")
+    # Ensure columns exist
+    today_upd = ensure_columns(today_upd.copy(), ["jalmitra","scheme_name","reading","water_quantity","reading_time"])
+    # sort by reading_time desc to get latest per jalmitra, then drop duplicates
+    # normalize reading_time so sort works even if empty strings
+    today_upd['reading_time_sort'] = today_upd['reading_time'].astype(str)
+    today_upd = today_upd.sort_values(by=['jalmitra','reading_time_sort'], ascending=[True, False])
+    latest_per_jm = today_upd.drop_duplicates(subset=['jalmitra'], keep='first').copy()
+
+    # Build daily table with jalmitra, scheme_name (from readings), reading (6-digit), water_quantity
+    daily = latest_per_jm[['jalmitra','scheme_name','reading','water_quantity']].copy()
+    daily.columns = ['Jalmitra','Scheme Name','BFM Reading','Water Quantity (m³)']
+    daily = daily.sort_values('Jalmitra').reset_index(drop=True)
+
+    # Format and display (BFM reading as 6-digit, blue gradient)
     st.dataframe(
-        daily.style.format({"BFM Reading":"{:06d}","Water Quantity (m³)":"{:.2f}"})
-        .background_gradient(cmap="Blues",subset=["BFM Reading","Water Quantity (m³)"]),
-        height=350)
+        daily.style.format({'BFM Reading':'{:06.0f}','Water Quantity (m³)':'{:.2f}'})
+        .background_gradient(cmap='Blues', subset=['Water Quantity (m³)']),
+        height=360
+    )
 
 # ---------------------------  Export  ---------------------------
 st.markdown("---"); st.subheader("📤 Export Snapshot")
 st.download_button("Schemes CSV",st.session_state["schemes"].to_csv(index=False).encode("utf-8"),"schemes.csv")
 st.download_button("Readings CSV",st.session_state["readings"].to_csv(index=False).encode("utf-8"),"readings.csv")
-st.download_button("Metrics CSV",metrics.to_csv(index=False).encode("utf-8"),"metrics.csv")
+# metrics may be undefined if no data; guard it
+try:
+    st.download_button("Metrics CSV",metrics.to_csv(index=False).encode("utf-8"),"metrics.csv")
+except Exception:
+    st.info("Metrics CSV not available.")
 st.success(f"Dashboard ready for SO {so}. Demo data generated: {st.session_state['demo_generated']}")

@@ -1,11 +1,8 @@
 # jjm_demo_app.py
-# Jal Jeevan Mission — Full dashboard (robust, defensive, clickable pies)
-# - All features included (see header notes in conversation)
-# - Uses SQLite safely; falls back to session-state if DB not usable
-# - Clickable pies via streamlit-plotly-events when available (fallback buttons otherwise)
-# - Ranking: fixed 50% days-updated + 50% total-water (as requested)
-# - Export CSVs, interactive Plotly chart, Top/Worst tables with color gradients
-# - Defensive error handling and helpful on-screen debug info
+# Full JJM dashboard — robust version with defensive column checks to avoid KeyError
+# - Preserves all features: SQLite (if writable) or session fallback, demo generator, clickable pies (optional),
+#   3-col water table, 7-day Plotly chart, Top/Worst rankings (50/50), CSV exports.
+# - Important: checks and injects missing columns before merges/selection to avoid KeyError.
 
 import streamlit as st
 import pandas as pd
@@ -18,9 +15,7 @@ import logging
 from pathlib import Path
 from typing import Tuple
 
-# plotting
 import plotly.express as px
-import matplotlib.pyplot as plt
 
 # optional dependency for clickable plotly events
 try:
@@ -40,61 +35,83 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("jjm_dashboard")
 
 # ---------------------------
-# Config / DB file path
+# Page config & constants
 # ---------------------------
-st.set_page_config(page_title="JJM Unified Dashboard — Full", layout="wide")
+st.set_page_config(page_title="JJM Unified Dashboard — Robust", layout="wide")
 DB_FILENAME = "jjm_demo.sqlite"
-DB_PATH = Path(DB_FILENAME)
+IMAGE_REL_PATH = "assaa.png"  # optional image (include in repo if required)
 
-# Use an app folder for images if present
-IMAGE_REL_PATH = "assaa.png"  # include in repo if you want it shown
+# required standard schemas for both tables
+SCHEMES_COLS = ["id", "scheme_name", "functionality", "so_name"]
+READINGS_COLS = ["id", "scheme_id", "jalmitra", "reading", "reading_date", "reading_time", "water_quantity"]
 
 # ---------------------------
-# Helpers: DB engine / session fallback
+# Helper: ensure columns exist
 # ---------------------------
-def get_engine():
-    """
-    Try to create/connect to a SQLite engine in the app folder.
-    If that fails (permission), return None and we will use session_state fallback.
-    """
+def ensure_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    """Return df with at least the requested cols (added with safe default None/0)."""
+    if df is None:
+        df = pd.DataFrame(columns=cols)
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        for c in missing:
+            # choose a sensible default
+            if c in ("id", "scheme_id", "reading"):
+                df[c] = 0
+            elif c == "water_quantity":
+                df[c] = 0.0
+            else:
+                df[c] = ""
+        logger.info("Added missing columns to dataframe: %s", missing)
+    # keep column order: existing cols first, then ensure requested cols appear
+    # don't reorder other columns aggressively - but we can reindex to include requested cols
+    return df.reindex(columns=list(df.columns) + [c for c in cols if c not in df.columns])
+
+# ---------------------------
+# DB engine attempt (SQLite)
+# ---------------------------
+def get_engine(db_filename=DB_FILENAME):
     try:
-        engine = create_engine(f"sqlite:///{DB_FILENAME}", connect_args={"check_same_thread": False})
-        # quick test: create tables if not exist
+        engine = create_engine(f"sqlite:///{db_filename}", connect_args={"check_same_thread": False})
+        # create tables if absent
         with engine.begin() as conn:
             conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS schemes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                scheme_name TEXT,
-                functionality TEXT,
-                so_name TEXT
-            )
-            """))
+                CREATE TABLE IF NOT EXISTS schemes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scheme_name TEXT,
+                    functionality TEXT,
+                    so_name TEXT
+                )"""))
             conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS bfm_readings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                scheme_id INTEGER,
-                jalmitra TEXT,
-                reading INTEGER,
-                reading_date TEXT,
-                reading_time TEXT,
-                water_quantity REAL
-            )
-            """))
+                CREATE TABLE IF NOT EXISTS bfm_readings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scheme_id INTEGER,
+                    jalmitra TEXT,
+                    reading INTEGER,
+                    reading_date TEXT,
+                    reading_time TEXT,
+                    water_quantity REAL
+                )"""))
         return engine
-    except (OperationalError, SQLAlchemyError, Exception) as e:
-        logger.warning("SQLite engine not available or not writable: %s", e)
+    except Exception as e:
+        logger.warning("Cannot create/connect SQLite engine: %s", e)
         return None
 
+engine = get_engine()
+USE_DB = engine is not None
+if not USE_DB:
+    st.warning("SQLite DB not available or not writable — running in session-only mode. Data will reset on refresh.")
+else:
+    st.info(f"Using SQLite DB file: {DB_FILENAME}")
+
 # ---------------------------
-# Session-state fallback init (only used if DB not available)
+# Session-state fallback initialization
 # ---------------------------
-def init_session_state():
+def init_session_fallback():
     if "schemes_df" not in st.session_state:
-        st.session_state["schemes_df"] = pd.DataFrame(columns=["id","scheme_name","functionality","so_name"])
+        st.session_state["schemes_df"] = pd.DataFrame(columns=SCHEMES_COLS)
     if "readings_df" not in st.session_state:
-        st.session_state["readings_df"] = pd.DataFrame(columns=[
-            "id","scheme_id","jalmitra","reading","reading_date","reading_time","water_quantity"
-        ])
+        st.session_state["readings_df"] = pd.DataFrame(columns=READINGS_COLS)
     if "jalmitras" not in st.session_state:
         st.session_state["jalmitras"] = []
     if "next_scheme_id" not in st.session_state:
@@ -108,174 +125,104 @@ def init_session_state():
     if "selected_updates_slice" not in st.session_state:
         st.session_state["selected_updates_slice"] = None
 
-# ---------------------------
-# DB read/write helpers (use engine if exists, else session-state)
-# ---------------------------
-engine = get_engine()
-use_db = engine is not None
+if not USE_DB:
+    init_session_fallback()
 
-if not use_db:
-    init_session_state()
-    st.warning("SQLite DB not available or not writable — running in session-only mode. Data will be lost on refresh.")
-else:
-    st.info("Using SQLite DB file: %s" % DB_FILENAME)
-
-def read_table_sql(table_name: str):
-    if use_db:
+# ---------------------------
+# DB / session read/write helpers (defensive)
+# ---------------------------
+def read_table(table_name: str) -> pd.DataFrame:
+    if USE_DB:
         try:
             with engine.connect() as conn:
                 df = pd.read_sql(text(f"SELECT * FROM {table_name}"), conn)
+            # ensure columns present
+            if table_name == "schemes":
+                df = ensure_columns(df, SCHEMES_COLS)
+            else:
+                df = ensure_columns(df, READINGS_COLS)
             return df
         except Exception as e:
-            logger.error("Error reading table %s: %s", table_name, e)
-            return pd.DataFrame()
-    else:
-        key = "schemes_df" if table_name == "schemes" else "readings_df"
-        return st.session_state.get(key, pd.DataFrame())
+            logger.error("DB read error for %s: %s", table_name, e)
+            # fallback to session
+    # session fallback:
+    init_session_fallback()
+    key = "schemes_df" if table_name == "schemes" else "readings_df"
+    df = st.session_state.get(key, pd.DataFrame())
+    df = ensure_columns(df, SCHEMES_COLS if table_name == "schemes" else READINGS_COLS)
+    return df
 
-def write_schemes_df(df: pd.DataFrame):
-    if use_db:
-        # replace table
-        try:
-            with engine.begin() as conn:
-                conn.execute(text("DELETE FROM schemes"))
-                # bulk insert
-                for _, row in df.iterrows():
-                    conn.execute(text("""
-                        INSERT INTO schemes (id, scheme_name, functionality, so_name)
-                        VALUES (:id, :scheme_name, :functionality, :so_name)
-                    """), {"id": int(row["id"]), "scheme_name": row["scheme_name"], "functionality": row["functionality"], "so_name": row["so_name"]})
-        except Exception as e:
-            logger.error("Error writing schemes: %s", e)
-            # fallback to session state
-            st.session_state["schemes_df"] = df.copy()
+def write_table_replace(table_name: str, df: pd.DataFrame):
+    df = df.copy()
+    if table_name == "schemes":
+        df = ensure_columns(df, SCHEMES_COLS)
     else:
-        st.session_state["schemes_df"] = df.copy()
+        df = ensure_columns(df, READINGS_COLS)
 
-def write_readings_df(df: pd.DataFrame):
-    if use_db:
+    if USE_DB:
         try:
+            # naive replace: delete then insert
             with engine.begin() as conn:
-                conn.execute(text("DELETE FROM bfm_readings"))
-                for _, row in df.iterrows():
-                    conn.execute(text("""
-                        INSERT INTO bfm_readings (id, scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
-                        VALUES (:id, :scheme_id, :jalmitra, :reading, :reading_date, :reading_time, :water_quantity)
-                    """), {
-                        "id": int(row["id"]),
-                        "scheme_id": int(row["scheme_id"]),
-                        "jalmitra": row["jalmitra"],
-                        "reading": int(row["reading"]),
-                        "reading_date": row["reading_date"],
-                        "reading_time": row["reading_time"],
-                        "water_quantity": float(row["water_quantity"])
-                    })
+                conn.execute(text(f"DELETE FROM {table_name}"))
+                # insert rows one by one (safe)
+                if not df.empty:
+                    if table_name == "schemes":
+                        for _, r in df.iterrows():
+                            conn.execute(text("""
+                                INSERT INTO schemes (id, scheme_name, functionality, so_name)
+                                VALUES (:id, :scheme_name, :functionality, :so_name)
+                            """), {"id": int(r["id"]) if r["id"] != "" else None,
+                                   "scheme_name": r["scheme_name"], "functionality": r["functionality"], "so_name": r["so_name"]})
+                    else:
+                        for _, r in df.iterrows():
+                            conn.execute(text("""
+                                INSERT INTO bfm_readings (id, scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
+                                VALUES (:id, :scheme_id, :jalmitra, :reading, :reading_date, :reading_time, :water_quantity)
+                            """), {
+                                "id": int(r["id"]) if r["id"] != "" else None,
+                                "scheme_id": int(r["scheme_id"]) if r["scheme_id"] != "" else None,
+                                "jalmitra": r["jalmitra"],
+                                "reading": int(r["reading"]) if r["reading"] != "" else None,
+                                "reading_date": r["reading_date"],
+                                "reading_time": r["reading_time"],
+                                "water_quantity": float(r["water_quantity"]) if r["water_quantity"] != "" else 0.0
+                            })
+            return
         except Exception as e:
-            logger.error("Error writing readings: %s", e)
-            st.session_state["readings_df"] = df.copy()
-    else:
-        st.session_state["readings_df"] = df.copy()
+            logger.error("DB write error for %s: %s", table_name, e)
+            # fallback to session below
 
-def append_scheme_row(scheme_row: dict):
-    if use_db:
-        try:
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    INSERT INTO schemes (scheme_name, functionality, so_name)
-                    VALUES (:scheme_name, :functionality, :so_name)
-                """), scheme_row)
-        except Exception as e:
-            logger.error("Error inserting scheme row: %s", e)
-            # fallback
-            df = st.session_state["schemes_df"]
-            df = pd.concat([df, pd.DataFrame([scheme_row])], ignore_index=True)
-            st.session_state["schemes_df"] = df
-    else:
-        df = st.session_state["schemes_df"]
-        df = pd.concat([df, pd.DataFrame([scheme_row])], ignore_index=True)
+    # session fallback
+    init_session_fallback()
+    if table_name == "schemes":
         st.session_state["schemes_df"] = df
-
-def append_reading_row(reading_row: dict):
-    if use_db:
-        try:
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    INSERT INTO bfm_readings (scheme_id, jalmitra, reading, reading_date, reading_time, water_quantity)
-                    VALUES (:scheme_id, :jalmitra, :reading, :reading_date, :reading_time, :water_quantity)
-                """), reading_row)
-        except Exception as e:
-            logger.error("Error inserting reading row: %s", e)
-            df = st.session_state["readings_df"]
-            df = pd.concat([df, pd.DataFrame([reading_row])], ignore_index=True)
-            st.session_state["readings_df"] = df
     else:
-        df = st.session_state["readings_df"]
-        df = pd.concat([df, pd.DataFrame([reading_row])], ignore_index=True)
         st.session_state["readings_df"] = df
 
 # ---------------------------
-# Utility: create demo data (writes to DB or session-state)
+# Demo generator (writes to store)
 # ---------------------------
-def generate_demo_into_store(total_schemes=20, so_name="SO-Guwahati"):
-    """
-    Generate 20 demo schemes and up to 7 days readings for functional schemes.
-    Uses deterministic Jalmitra names JM-1..JM-N mapped to schemes by index.
-    """
+def generate_demo(total_schemes: int = 20, so_name: str = "SO-Guwahati"):
     today = datetime.date.today()
     FIXED_UPDATE_PROB = 0.85
     reading_samples = [110010, 215870, 150340, 189420, 200015, 234870]
 
-    # Schemes dataframe
+    # build schemes df
     schemes = []
-    jalmitras = [f"JM-{i+1}" for i in range(total_schemes)]
-    next_scheme_id = 1
-    # if using DB and existing rows, calculate next id
-    if use_db:
-        try:
-            existing = read_table_sql("schemes")
-            if not existing.empty:
-                next_scheme_id = int(existing['id'].max()) + 1
-        except Exception:
-            next_scheme_id = 1
-    else:
-        if "next_scheme_id" in st.session_state:
-            next_scheme_id = st.session_state["next_scheme_id"]
-
     for i in range(total_schemes):
-        scheme_name = f"Scheme {chr(65 + (i % 26))}{'' if i < 26 else i//26}"
-        functionality = random.choice(["Functional", "Non-Functional"])
         schemes.append({
-            "id": next_scheme_id,
-            "scheme_name": scheme_name,
-            "functionality": functionality,
+            "id": i+1,
+            "scheme_name": f"Scheme {chr(65 + (i % 26))}{'' if i < 26 else i//26}",
+            "functionality": random.choice(["Functional", "Non-Functional"]),
             "so_name": so_name
         })
-        next_scheme_id += 1
-
     schemes_df = pd.DataFrame(schemes)
+    schemes_df = ensure_columns(schemes_df, SCHEMES_COLS)
 
-    # Save schemes to store (replace)
-    if use_db:
-        write_schemes_df(schemes_df)
-    else:
-        st.session_state["schemes_df"] = schemes_df
-        st.session_state["jalmitras"] = jalmitras
-        st.session_state["next_scheme_id"] = next_scheme_id
-
-    # readings
+    # build readings for functional schemes only
     readings = []
-    next_reading_id = 1
-    if use_db:
-        try:
-            existing_r = read_table_sql("bfm_readings")
-            if not existing_r.empty:
-                next_reading_id = int(existing_r['id'].max()) + 1
-        except Exception:
-            next_reading_id = 1
-    else:
-        if "next_reading_id" in st.session_state:
-            next_reading_id = st.session_state["next_reading_id"]
-
+    jalmitras = [f"JM-{i+1}" for i in range(total_schemes)]
+    rid = 1
     for idx, row in schemes_df.reset_index().iterrows():
         if row["functionality"] != "Functional":
             continue
@@ -285,7 +232,7 @@ def generate_demo_into_store(total_schemes=20, so_name="SO-Guwahati"):
             date = (today - datetime.timedelta(days=d)).isoformat()
             if random.random() < FIXED_UPDATE_PROB:
                 readings.append({
-                    "id": next_reading_id,
+                    "id": rid,
                     "scheme_id": scheme_id,
                     "jalmitra": jalmitra,
                     "reading": int(random.choice(reading_samples)),
@@ -293,179 +240,176 @@ def generate_demo_into_store(total_schemes=20, so_name="SO-Guwahati"):
                     "reading_time": f"{random.randint(6,18)}:{random.choice(['00','15','30','45'])}:00",
                     "water_quantity": round(random.uniform(40.0, 350.0), 2)
                 })
-                next_reading_id += 1
-
+                rid += 1
     readings_df = pd.DataFrame(readings)
-    if use_db:
-        write_readings_df(readings_df)
-    else:
-        st.session_state["readings_df"] = readings_df
-        st.session_state["next_reading_id"] = next_reading_id
+    readings_df = ensure_columns(readings_df, READINGS_COLS)
 
-    # mark demo_generated
-    if use_db:
-        # store a tiny marker in a table? we'll just set session flag
-        st.session_state["demo_generated"] = True
-    else:
-        st.session_state["demo_generated"] = True
+    # write to store
+    write_table_replace("schemes", schemes_df)
+    write_table_replace("bfm_readings", readings_df)
+
+    # update session metadata
+    init_session_fallback()
+    st.session_state["jalmitras"] = jalmitras
+    st.session_state["demo_generated"] = True
+    st.success("Demo data generated (stored)." )
 
 # ---------------------------
-# Utility: read merged tables and metrics (safe)
+# Helper: merged data and metrics (defensive)
 # ---------------------------
 @st.cache_data
-def get_schemes_readings(so_name="SO-Guwahati"):
-    """
-    Return schemes_df and readings_df merged (safe), using DB or session fallback.
-    """
-    if use_db:
-        try:
-            with engine.connect() as conn:
-                schemes = pd.read_sql(text("SELECT * FROM schemes WHERE so_name = :so"), conn, params={"so": so_name})
-                readings = pd.read_sql(text("SELECT * FROM bfm_readings"), conn)
-            return schemes, readings
-        except Exception as e:
-            logger.error("Error fetching schemes/readings from DB: %s", e)
-            # fallback to session state if available
-            init_session_state()
-            return st.session_state.get("schemes_df", pd.DataFrame()), st.session_state.get("readings_df", pd.DataFrame())
-    else:
-        init_session_state()
-        return st.session_state.get("schemes_df", pd.DataFrame()), st.session_state.get("readings_df", pd.DataFrame())
+def fetch_and_compute(so_name: str, start_date: str, end_date: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    schemes_df = read_table("schemes")
+    readings_df = read_table("bfm_readings")
+    # ensure essential columns exist before merges
+    schemes_df = ensure_columns(schemes_df, SCHEMES_COLS)
+    readings_df = ensure_columns(readings_df, READINGS_COLS)
 
-@st.cache_data
-def compute_metrics_and_pivot(readings_df: pd.DataFrame, schemes_df: pd.DataFrame, so_name: str, start_date: str, end_date: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Compute merged last7_all and per-jalmitra metrics.
-    """
-    if readings_df is None or schemes_df is None or schemes_df.empty:
-        return pd.DataFrame(), pd.DataFrame()
-
+    # defensive merge: if reading has scheme_name already join gracefully else left join
     try:
-        merged = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left')
-    except Exception:
-        # Defensive: ensure expected columns exist
+        merged = readings_df.merge(schemes_df[["id","scheme_name","functionality","so_name"]], left_on="scheme_id", right_on="id", how="left")
+    except Exception as e:
+        logger.warning("Merge fallback triggered: %s", e)
         merged = readings_df.copy()
-        merged['scheme_name'] = merged.get('scheme_name', '')
-        merged['functionality'] = merged.get('functionality', '')
-        merged['so_name'] = merged.get('so_name', '')
+        for c in ["scheme_name","functionality","so_name"]:
+            if c not in merged.columns:
+                merged[c] = ""
 
-    mask = (merged['functionality'] == 'Functional') & (merged['so_name'] == so_name) & (merged['reading_date'] >= start_date) & (merged['reading_date'] <= end_date)
+    # filter for last 7 days and functional schemes under this SO
+    mask = (merged.get("functionality", "") == "Functional")  # this produces series False if scalar; handle below
+    # create correct boolean mask safely:
+    try:
+        mask = (merged["functionality"] == "Functional") & (merged["so_name"] == so_name) & (merged["reading_date"] >= start_date) & (merged["reading_date"] <= end_date)
+    except Exception:
+        # fallback: ensure columns exist as strings and create mask elementwise
+        merged["functionality"] = merged.get("functionality", "")
+        merged["so_name"] = merged.get("so_name", "")
+        merged["reading_date"] = merged.get("reading_date", "")
+        mask = (merged["functionality"] == "Functional") & (merged["so_name"] == so_name) & (merged["reading_date"] >= start_date) & (merged["reading_date"] <= end_date)
+
     last7 = merged.loc[mask].copy()
     if last7.empty:
-        return last7, pd.DataFrame()
+        return last7, pd.DataFrame()  # no metrics
 
-    metrics = last7.groupby('jalmitra').agg(
-        days_updated=('reading_date', lambda x: x.nunique()),
-        total_water_m3=('water_quantity', 'sum'),
-        schemes_covered=('scheme_id', lambda x: x.nunique())
+    metrics = last7.groupby("jalmitra").agg(
+        days_updated = ("reading_date", lambda x: x.nunique()),
+        total_water_m3 = ("water_quantity", "sum"),
+        schemes_covered = ("scheme_id", lambda x: x.nunique())
     ).reset_index()
-    metrics['days_updated'] = metrics['days_updated'].astype(int)
-    metrics['total_water_m3'] = metrics['total_water_m3'].astype(float).round(2)
+    metrics["days_updated"] = metrics["days_updated"].astype(int)
+    metrics["total_water_m3"] = metrics["total_water_m3"].astype(float).round(2)
     return last7, metrics
 
 # ---------------------------
-# UI: Header
+# UI Start
 # ---------------------------
 st.title("Jal Jeevan Mission — Landing Dashboard")
 st.markdown("---")
 
-# Optional logo/image
+# Optional image (show only if in repo)
 if Path(IMAGE_REL_PATH).exists():
     st.image(IMAGE_REL_PATH, width=180)
 
-# ---------------------------
-# Demo Data Management (UI)
-# ---------------------------
+# Demo data UI
 st.markdown("### 🧪 Demo Data Management")
-col1, col2 = st.columns(2)
-with col1:
-    total_schemes = st.number_input("Total demo schemes", min_value=4, max_value=200, value=20, step=1)
+colg, colr = st.columns([2,1])
+with colg:
+    total_schemes = st.number_input("Total demo schemes", min_value=4, max_value=200, value=20)
     if st.button("Generate Demo Data"):
         try:
-            generate_demo_into_store(total_schemes)
-            st.success("✅ Demo data generated.")
+            generate_demo(int(total_schemes))
         except Exception as e:
-            st.error("Error generating demo data: %s" % e)
+            st.error(f"Demo generation failed: {e}")
             logger.exception(e)
-
-with col2:
+with colr:
     if st.button("Remove Demo Data"):
-        # remove DB tables or clear session
-        if use_db:
+        if USE_DB:
             try:
                 with engine.begin() as conn:
                     conn.execute(text("DELETE FROM schemes"))
                     conn.execute(text("DELETE FROM bfm_readings"))
-                st.success("🗑️ Demo data removed from DB.")
+                st.success("Demo data removed from DB.")
             except Exception as e:
-                st.error("Error clearing DB: %s" % e)
+                st.error(f"Could not clear DB: {e}")
                 logger.exception(e)
         else:
-            init_session_state()
-            st.success("🗑️ Demo data removed from session.")
+            init_session_fallback()
+            st.success("Demo data cleared from session.")
 
 st.markdown("---")
 
-# ---------------------------
 # Role selection
-# ---------------------------
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
 if role != "Section Officer":
-    st.info("Currently the Section Officer (SO) view is the main active view. AEE / EE are placeholders.")
-    if st.button("Continue to SO view anyway"):
-        pass
-    else:
+    st.info("Currently the Section Officer dashboard is the active detailed view (AEE/EE are placeholders).")
+    if not st.button("Continue to SO view"):
         st.stop()
 
-# ---------------------------
-# Main Dashboard (SO)
-# ---------------------------
+# Main dashboard
 st.header("Section Officer Dashboard")
 so_name = "SO-Guwahati"
 
-# fetch data
-schemes_df, readings_df = get_schemes_readings(so_name=so_name)
-
-if schemes_df is None or schemes_df.empty:
-    st.info("No schemes found. Use 'Generate Demo Data' above to populate the dashboard.")
-    st.stop()
-
-# ---------- Overview: two pies side-by-side (clickable) ----------
-st.subheader("📊 Overview")
-
-# Pie 1: Scheme functionality
-func_counts = schemes_df['functionality'].value_counts()
-fig_func = px.pie(names=func_counts.index, values=func_counts.values, title="Scheme Functionality",
-                  color=func_counts.index, color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"}, hole=0.3)
-fig_func.update_traces(textinfo='percent+label')
-fig_func.update_layout(margin=dict(l=10,r=10,t=20,b=10), height=260)
-
-# Pie 2: Jalmitra updates today (functional schemes only)
+# compute start/end for last 7 days
 today = datetime.date.today().isoformat()
-merged_today = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left') if not readings_df.empty else pd.DataFrame()
-today_updates = merged_today[
-    (merged_today['reading_date'] == today) &
-    (merged_today['functionality'] == 'Functional') &
-    (merged_today['so_name'] == so_name)
-] if not merged_today.empty else pd.DataFrame()
+start_date = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
+
+# fetch merged last7 and metrics
+last7_all, metrics = fetch_and_compute(so_name, start_date, today)
+
+# read schemes and readings (for tables)
+schemes_df = read_table("schemes")
+schemes_df = ensure_columns(schemes_df, SCHEMES_COLS)
+readings_df = read_table("bfm_readings")
+readings_df = ensure_columns(readings_df, READINGS_COLS)
+
+# Overview pies
+st.subheader("📋 Overview")
+# Pie: functionality
+func_counts = schemes_df["functionality"].value_counts()
+if func_counts.empty:
+    func_counts = pd.Series({"Functional":0, "Non-Functional":0})
+fig_func = px.pie(names=func_counts.index, values=func_counts.values, hole=0.3,
+                  color=func_counts.index, color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"})
+fig_func.update_traces(textinfo='percent+label')
+fig_func.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=240)
+
+# Pie: updates today (functional only)
+# create merged_today defensively
+try:
+    merged_today = readings_df.merge(schemes_df[["id","scheme_name","functionality","so_name"]], left_on="scheme_id", right_on="id", how="left") if not readings_df.empty else pd.DataFrame()
+except Exception:
+    # ensure fallback columns
+    merged_today = readings_df.copy()
+    for c in ["scheme_name","functionality","so_name"]:
+        if c not in merged_today.columns:
+            merged_today[c] = ""
+
+if not merged_today.empty:
+    today_updates = merged_today[
+        (merged_today['reading_date'] == today) &
+        (merged_today.get('functionality','') == 'Functional') &
+        (merged_today.get('so_name','') == so_name)
+    ]
+else:
+    today_updates = pd.DataFrame(columns=merged_today.columns)
+
 updated_set = set(today_updates['jalmitra'].unique()) if not today_updates.empty else set()
-total_functional = int(len(schemes_df[schemes_df['functionality'] == 'Functional']))
+total_functional = int(len(schemes_df[schemes_df['functionality'] == "Functional"]))
 updated_count = len(updated_set)
 absent_count = max(total_functional - updated_count, 0)
-df_updates = pd.DataFrame({"status": ["Updated", "Absent"], "count": [updated_count, absent_count]})
-if df_updates['count'].sum() == 0:
+df_updates = pd.DataFrame({"status":["Updated","Absent"], "count":[updated_count, absent_count]})
+if df_updates["count"].sum() == 0:
     df_updates = pd.DataFrame({"status":["Updated","Absent"], "count":[0, max(total_functional,1)]})
-fig_updates = px.pie(df_updates, names='status', values='count', title="Jalmitra Updates (Today)",
-                     color='status', color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"}, hole=0.3)
+fig_updates = px.pie(df_updates, names='status', values='count', hole=0.3,
+                     color='status', color_discrete_map={"Updated":"#4CAF50","Absent":"#F44336"})
 fig_updates.update_traces(textinfo='percent+label')
-fig_updates.update_layout(margin=dict(l=10,r=10,t=20,b=10), height=260)
+fig_updates.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=240)
 
-# display pies side-by-side
-col_left, col_right = st.columns([1,1])
-with col_left:
+# Show pies side-by-side and capture clicks (if available) with safe guards
+col1, col2 = st.columns([1,1])
+with col1:
     st.markdown("#### Scheme Functionality")
     st.plotly_chart(fig_func, use_container_width=True)
-    # clickable capture
     if PLOTLY_EVENTS_AVAILABLE:
         clicks = plotly_events(fig_func, click_event=True, hover_event=False, key="func_pie")
         if clicks:
@@ -473,13 +417,13 @@ with col_left:
             if lbl in ["Functional", "Non-Functional"]:
                 st.session_state["selected_functionality_slice"] = lbl
     else:
-        st.info("Tip: install streamlit-plotly-events for native clicks. Fallback buttons available.")
+        st.info("Install 'streamlit-plotly-events' to enable native clicks. Fallback buttons shown.")
         if st.button("Filter: Functional"):
             st.session_state["selected_functionality_slice"] = "Functional"
         if st.button("Filter: Non-Functional"):
             st.session_state["selected_functionality_slice"] = "Non-Functional"
 
-with col_right:
+with col2:
     st.markdown("#### Jalmitra Updates (Today)")
     st.plotly_chart(fig_updates, use_container_width=True)
     if PLOTLY_EVENTS_AVAILABLE:
@@ -494,7 +438,7 @@ with col_right:
         if st.button("Show Absent Jalmitras"):
             st.session_state["selected_updates_slice"] = "Absent"
 
-# small clear selection row
+# clear filters small buttons
 c1, c2 = st.columns([1,1])
 with c1:
     if st.button("Clear Functionality Filter"):
@@ -505,118 +449,115 @@ with c2:
 
 st.markdown("---")
 
-# ---------- Schemes table (respects functionality filter) ----------
+# Schemes tables (respect functionality filter defensively)
 st.subheader("All Schemes under SO")
-if st.session_state.get("selected_functionality_slice"):
-    filt = st.session_state["selected_functionality_slice"]
-    st.markdown(f"**Filtered by functionality → {filt}**")
-    st.dataframe(schemes_df[schemes_df['functionality'] == filt], height=220)
+selected_func = st.session_state.get("selected_functionality_slice")
+if selected_func:
+    # ensure functionality column exists
+    schemes_df = ensure_columns(schemes_df, SCHEMES_COLS)
+    st.markdown(f"**Filtered: {selected_func}**")
+    st.dataframe(schemes_df[schemes_df["functionality"] == selected_func], height=220)
 else:
     st.dataframe(schemes_df, height=220)
 
 st.subheader("Functional Schemes under SO")
-functional_schemes = schemes_df[schemes_df['functionality'] == "Functional"]
+functional_schemes = schemes_df[schemes_df.get("functionality","") == "Functional"]
 if functional_schemes.empty:
-    st.info("No functional schemes found under this SO.")
+    st.info("No functional schemes found.")
 else:
     st.dataframe(functional_schemes, height=220)
 
-# ---------- Today's readings (functional only) ----------
+# Today's readings (functional)
 st.markdown("---")
-st.subheader("BFM Readings by Jalmitras Today")
+st.subheader("BFM Readings by Jalmitras Today (Functional schemes)")
 if today_updates.empty:
-    st.info("No readings for today for functional schemes.")
+    st.info("No readings recorded today for functional schemes.")
 else:
-    st.dataframe(today_updates[['scheme_name','jalmitra','reading','reading_time','water_quantity']], height=220)
+    safe_today = ensure_columns(today_updates, READINGS_COLS + SCHEMES_COLS)
+    st.dataframe(safe_today[["scheme_name","jalmitra","reading","reading_time","water_quantity"]], height=220)
 
-# simple 3-column water table for today
+# 3-col water table (today)
 st.markdown("---")
 st.subheader("💧 Water Quantity Supplied (m³) per Jalmitra per Scheme (Today)")
 if not today_updates.empty:
-    table_simple = today_updates[['jalmitra','scheme_name','water_quantity']].copy()
-    table_simple.columns = ['Jalmitra','Scheme','Water Quantity (m³)']
+    table_simple = safe_today[["jalmitra","scheme_name","water_quantity"]].copy()
+    table_simple.columns = ["Jalmitra","Scheme","Water Quantity (m³)"]
     st.dataframe(table_simple, height=220)
-    st.download_button("⬇️ Download Today's Water Table (CSV)", table_simple.to_csv(index=False).encode('utf-8'), file_name="water_today.csv", mime="text/csv")
+    st.download_button("⬇️ Download Today's Water Table (CSV)", table_simple.to_csv(index=False).encode("utf-8"), file_name="water_today.csv", mime="text/csv")
 else:
-    st.info("No water quantity measurements for today.")
+    st.info("No water quantity data for today.")
 
-# ---------- Rankings (last 7 days): top and worst with 50/50 weighting ----------
+# Rankings last 7 days
 st.markdown("---")
-st.subheader("🏅 Jalmitra Performance Rankings (Last 7 Days)")
-
-start_date = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
-end_date = today
-last7_all, metrics = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
+st.subheader("🏅 Jalmitra Performance Rankings (Last 7 Days) — 50% Frequency + 50% Quantity")
 
 if last7_all.empty:
-    st.info("No readings in the last 7 days for functional schemes. Generate demo data to see rankings.")
+    st.info("No readings for the last 7 days (functional schemes). Generate demo data to populate.")
 else:
-    # ensure all pendings jalmitras exist in metrics
-    jalmitras_list = st.session_state.get("jalmitras", [f"JM-{i+1}" for i in range(len(schemes_df))])
-    for jm in jalmitras_list:
-        if jm not in metrics['jalmitra'].values:
-            metrics = pd.concat([metrics, pd.DataFrame([{'jalmitra': jm, 'days_updated': 0, 'total_water_m3': 0.0, 'schemes_covered': 0}])], ignore_index=True)
+    metrics = ensure_columns(metrics, ["jalmitra","days_updated","total_water_m3","schemes_covered"])
+    # ensure all known jalmitras present:
+    known_jms = st.session_state.get("jalmitras", [f"JM-{i+1}" for i in range(len(schemes_df))])
+    for jm in known_jms:
+        if jm not in metrics["jalmitra"].values:
+            metrics = pd.concat([metrics, pd.DataFrame([{"jalmitra": jm, "days_updated": 0, "total_water_m3": 0.0, "schemes_covered": 0}])], ignore_index=True)
+    metrics["days_updated"] = metrics["days_updated"].astype(int)
+    metrics["total_water_m3"] = metrics["total_water_m3"].astype(float)
+    metrics["days_norm"] = metrics["days_updated"] / 7.0
+    max_qty = metrics["total_water_m3"].max() if not metrics["total_water_m3"].empty else 0.0
+    metrics["qty_norm"] = metrics["total_water_m3"] / max_qty if max_qty > 0 else 0.0
+    metrics["score"] = 0.5 * metrics["days_norm"] + 0.5 * metrics["qty_norm"]
 
-    metrics['days_norm'] = metrics['days_updated'] / 7.0
-    max_qty = metrics['total_water_m3'].max() if not metrics['total_water_m3'].empty else 0.0
-    metrics['qty_norm'] = metrics['total_water_m3'] / max_qty if max_qty > 0 else 0.0
-    # fixed 50/50 weights
-    weight_freq = 0.5
-    weight_qty = 0.5
-    metrics['score'] = metrics['days_norm'] * weight_freq + metrics['qty_norm'] * weight_qty
-
-    # optionally filter by Updates pie selection (Updated / Absent)
+    # filter by updates selection if set
     sel_updates = st.session_state.get("selected_updates_slice")
     if sel_updates == "Updated":
-        metrics = metrics[metrics['jalmitra'].isin(updated_set)].copy()
+        metrics = metrics[metrics["jalmitra"].isin(updated_set)].copy()
     elif sel_updates == "Absent":
-        metrics = metrics[~metrics['jalmitra'].isin(updated_set)].copy()
+        metrics = metrics[~metrics["jalmitra"].isin(updated_set)].copy()
 
     if metrics.empty:
-        st.info("No Jalmitras match the applied filter.")
+        st.info("No Jalmitras match the current filter.")
     else:
-        metrics = metrics.sort_values(by=['score','total_water_m3'], ascending=False).reset_index(drop=True)
-        metrics['Rank'] = metrics.index + 1
-        metrics['total_water_m3'] = metrics['total_water_m3'].round(2)
-        metrics['score'] = metrics['score'].round(3)
+        metrics = metrics.sort_values(by=["score","total_water_m3"], ascending=False).reset_index(drop=True)
+        metrics["Rank"] = metrics.index + 1
+        metrics["total_water_m3"] = metrics["total_water_m3"].round(2)
+        metrics["score"] = metrics["score"].round(3)
 
-        top_table = metrics.sort_values(by='score', ascending=False).head(10)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
-        top_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
+        top_table = metrics.sort_values(by="score", ascending=False).head(10)[["Rank","jalmitra","days_updated","total_water_m3","score"]].copy()
+        top_table.columns = ["Rank","Jalmitra","Days Updated (last 7d)","Total Water (m³)","Score"]
 
-        worst_table = metrics.sort_values(by='score', ascending=True).head(10)[['Rank','jalmitra','days_updated','total_water_m3','score']].copy()
-        worst_table.columns = ['Rank','Jalmitra','Days Updated (last 7d)','Total Water (m³)','Score']
+        worst_table = metrics.sort_values(by="score", ascending=True).head(10)[["Rank","jalmitra","days_updated","total_water_m3","score"]].copy()
+        worst_table.columns = ["Rank","Jalmitra","Days Updated (last 7d)","Total Water (m³)","Score"]
 
-        # styling helpers: top = green gradient, worst = dark->light red
+        # styling
         def style_top(df):
-            sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
-            sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Greens')
+            sty = df.style.format({"Total Water (m³)": "{:,.2f}", "Score": "{:.3f}"})
+            sty = sty.background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Greens")
             return sty
 
         def style_worst(df):
-            # reversed Reds so smaller numeric values -> darker red
-            sty = df.style.format({'Total Water (m³)': '{:,.2f}', 'Score': '{:.3f}'})
-            sty = sty.background_gradient(subset=['Days Updated (last 7d)','Total Water (m³)','Score'], cmap='Reds_r')
+            # reversed Reds so lower values map to darker red
+            sty = df.style.format({"Total Water (m³)": "{:,.2f}", "Score": "{:.3f}"})
+            sty = sty.background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r")
             return sty
 
-        colt, colw = st.columns([1,1])
-        with colt:
+        c1, c2 = st.columns([1,1])
+        with c1:
             st.markdown("### 🟢 Top 10 Performing Jalmitras")
             st.dataframe(style_top(top_table), height=420)
-            st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode('utf-8'), file_name="top_10.csv", mime="text/csv")
-        with colw:
+            st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode("utf-8"), file_name="top_10.csv", mime="text/csv")
+        with c2:
             st.markdown("### 🔴 Worst 10 Performing Jalmitras")
             st.dataframe(style_worst(worst_table), height=420)
-            st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode('utf-8'), file_name="worst_10.csv", mime="text/csv")
+            st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode("utf-8"), file_name="worst_10.csv", mime="text/csv")
 
-# ---------- Last 7 days interactive Plotly line chart ----------
+# 7-day line chart
 st.markdown("---")
 st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
-
 if last7_all.empty:
-    st.info("No 7-day data available.")
+    st.info("No 7-day data to chart.")
 else:
-    last_week_qty = last7_all.groupby(['reading_date','scheme_name'])['water_quantity'].sum().reset_index()
-    pivot_chart = last_week_qty.pivot(index='reading_date', columns='scheme_name', values='water_quantity').fillna(0)
+    last_week_qty = last7_all.groupby(["reading_date","scheme_name"])["water_quantity"].sum().reset_index()
+    pivot_chart = last_week_qty.pivot(index="reading_date", columns="scheme_name", values="water_quantity").fillna(0)
     pivot_chart = pivot_chart.sort_index()
 
     st.markdown("**Chart options**")
@@ -627,51 +568,49 @@ else:
     with cc2:
         date_order = st.radio("Date order", options=["Ascending","Descending"], index=0)
 
-    scheme_sums = last_week_qty.groupby('scheme_name')['water_quantity'].sum().sort_values(ascending=False)
+    scheme_sums = last_week_qty.groupby("scheme_name")["water_quantity"].sum().sort_values(ascending=False)
     if top_k == "All":
         selected_schemes = scheme_sums.index.tolist()
     else:
         k = int(top_k.split()[1])
         selected_schemes = scheme_sums.head(k).index.tolist()
 
-    plot_df = last_week_qty[last_week_qty['scheme_name'].isin(selected_schemes)].copy()
+    plot_df = last_week_qty[last_week_qty["scheme_name"].isin(selected_schemes)].copy()
     if show_total:
-        total_df = last_week_qty.groupby('reading_date')['water_quantity'].sum().reset_index()
-        total_df['scheme_name'] = 'Total (all)'
+        total_df = last_week_qty.groupby("reading_date")["water_quantity"].sum().reset_index()
+        total_df["scheme_name"] = "Total (all)"
         plot_df = pd.concat([plot_df, total_df], ignore_index=True)
 
-    fig = px.line(plot_df, x='reading_date', y='water_quantity', color='scheme_name', markers=True,
-                  labels={'reading_date': 'Date', 'water_quantity': 'Water (m³)', 'scheme_name': 'Scheme'},
+    fig = px.line(plot_df, x="reading_date", y="water_quantity", color="scheme_name", markers=True,
+                  labels={"reading_date":"Date","water_quantity":"Water (m³)","scheme_name":"Scheme"},
                   title="Water Supplied (m³) — last 7 days")
-    fig.update_layout(legend_title_text='Scheme / Total')
+    fig.update_layout(legend_title_text="Scheme / Total")
     if date_order == "Descending":
-        fig.update_xaxes(categoryorder='array', categoryarray=sorted(plot_df['reading_date'].unique(), reverse=True))
+        fig.update_xaxes(categoryorder="array", categoryarray=sorted(plot_df["reading_date"].unique(), reverse=True))
     st.plotly_chart(fig, use_container_width=True, height=420)
 
-# ---------- Export snapshot & notes ----------
+# Snapshot exports
 st.markdown("---")
 st.subheader("Export Snapshot")
-st.download_button("Download Schemes CSV", schemes_df.to_csv(index=False).encode('utf-8'), file_name='schemes_snapshot.csv', mime='text/csv')
-st.download_button("Download Readings CSV", readings_df.to_csv(index=False).encode('utf-8'), file_name='readings_snapshot.csv', mime='text/csv')
+schemes_df = ensure_columns(schemes_df, SCHEMES_COLS)
+readings_df = ensure_columns(readings_df, READINGS_COLS)
+st.download_button("Download Schemes CSV", schemes_df.to_csv(index=False).encode("utf-8"), file_name="schemes_snapshot.csv", mime="text/csv")
+st.download_button("Download Readings CSV", readings_df.to_csv(index=False).encode("utf-8"), file_name="readings_snapshot.csv", mime="text/csv")
 try:
-    st.download_button("Download Metrics CSV", metrics.to_csv(index=False).encode('utf-8'), file_name='metrics_snapshot.csv', mime='text/csv')
+    st.download_button("Download Metrics CSV", metrics.to_csv(index=False).encode("utf-8"), file_name="metrics_snapshot.csv", mime="text/csv")
 except Exception:
     st.info("Metrics CSV not available (no data).")
 
 st.markdown("---")
 with st.expander("ℹ️ How ranking is computed"):
     st.markdown("""
-    - Days Updated (last 7d) = distinct days a Jalmitra submitted >=1 reading (0-7).
-    - Total Water (m³) = sum of water_quantity over last 7 days.
-    - Normalization:
-        - days_norm = days_updated / 7
-        - qty_norm = total_water / max_total_water
-    - Score = 0.50 * days_norm + 0.50 * qty_norm (fixed)
-    - Top table sorts by score descending; Worst table sorts by score ascending.
+    - Days Updated (last 7d): distinct days with at least one reading.
+    - Total Water (m³): cumulative water_quantity for last 7 days.
+    - Normalization: days_norm = days_updated / 7; qty_norm = total_water / max_total_water
+    - Score = 0.50 * days_norm + 0.50 * qty_norm (fixed).
     """)
 
-# ------------- Deployment note about clickable pies -------------
 if not PLOTLY_EVENTS_AVAILABLE:
-    st.warning("For native clickable pie behaviour install 'streamlit-plotly-events' and add it to requirements.txt. Fallback buttons are available in the UI.")
+    st.warning("To enable native clickable pie behaviour add `streamlit-plotly-events` to requirements.txt and redeploy. Fallback buttons are available.")
 
-st.success("Dashboard ready. Data stored in SQLite if writable; otherwise stored for session only.")
+st.success("Dashboard ready. Data stored in SQLite (if writable) or session fallback.")

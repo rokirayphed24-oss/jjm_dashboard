@@ -6,6 +6,7 @@ opencv-python-headless
 pytesseract
 Pillow
 matplotlib
-
+plotly
+altair
 
 

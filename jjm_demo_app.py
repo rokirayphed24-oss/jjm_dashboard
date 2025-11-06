@@ -1,10 +1,14 @@
 # jjm_demo_app.py
 # Unified Streamlit app — Overview layout updated (7-day chart removed)
-# - Left: Scheme Functionality (Today) pie
+# - Left: Scheme Functionality pie
 # - Right: Jalmitra Updates pie (today)
 # - Below those pies: Top 10 (green) and Worst 10 (red; darkest red for worst)
 # - Session-state storage, CSV export, etc.
-# UPDATED: SO name = "ROKI RAY", Assamese Jalmitra names, Overview shows date & SO name.
+# UPDATED:
+#   - SO name = "ROKI RAY"
+#   - Assamese Jalmitra names
+#   - Overview shows date & SO name
+#   - Added random Assamese village PWSS names in Top/Worst tables
 
 import streamlit as st
 import pandas as pd
@@ -187,13 +191,8 @@ st.markdown("---")
 # Role selection
 # ---------------------------
 role = st.selectbox("Select Role", ["Section Officer", "Assistant Executive Engineer", "Executive Engineer"])
-
-if role == "Assistant Executive Engineer":
-    st.header("Assistant Executive Engineer (AEE) — Placeholder")
-    st.stop()
-
-if role == "Executive Engineer":
-    st.header("Executive Engineer (EE) — Placeholder")
+if role != "Section Officer":
+    st.header(f"{role} Dashboard — Placeholder")
     st.stop()
 
 # ---------------------------
@@ -219,14 +218,8 @@ today = datetime.date.today()
 today_label = today.strftime("%A, %d %B %Y").upper()
 st.markdown(f"**DATE:** {today_label}  **SECTION OFFICER:** {so_name}")
 
-img_path = Path("/mnt/data/assaa.png")
-if img_path.exists():
-    try:
-        st.image(str(img_path), width=220, caption="Overview snapshot")
-    except Exception:
-        pass
-
 func_counts = schemes_df['functionality'].value_counts()
+today_iso = today.isoformat()
 
 merged_today = readings_df.merge(
     schemes_df[['id','scheme_name','functionality','so_name']],
@@ -234,7 +227,6 @@ merged_today = readings_df.merge(
 ) if not readings_df.empty else pd.DataFrame()
 merged_today = ensure_columns(merged_today, ['reading_date','functionality','so_name','jalmitra','scheme_name'])
 
-today_iso = today.isoformat()
 today_updates = merged_today[
     (merged_today['reading_date'] == today_iso) &
     (merged_today['functionality'] == 'Functional') &
@@ -268,13 +260,19 @@ with col_right:
 st.markdown("---")
 
 # ---------------------------
-# Top & Worst Jalmitras
+# Top & Worst Jalmitras (with scheme names)
 # ---------------------------
 st.subheader("🏅 Jalmitra Performance — Top & Worst (Last 7 Days)")
 start_date = (today - datetime.timedelta(days=6)).isoformat()
 end_date = today_iso
 last7_all, metrics_cached = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
 metrics_df = pd.DataFrame()
+
+# Random Assamese village PWSS names
+village_names = [
+    "Rampur", "Kahikuchi", "Dalgaon", "Guwahati", "Boko", "Moran", "Tezpur", "Sibsagar", "Jorhat", "Hajo",
+    "Tihu", "Kokrajhar", "Nalbari", "Barpeta", "Rangia", "Goalpara", "Dhemaji", "Dibrugarh", "Mariani", "Sonari"
+]
 
 if last7_all.empty:
     st.info("No readings found for last 7 days.")
@@ -294,8 +292,11 @@ else:
     metrics_df = metrics_df.sort_values(by='score', ascending=False).reset_index(drop=True)
     metrics_df['Rank'] = metrics_df.index + 1
 
-    top_table = metrics_df.head(10)[['Rank','jalmitra','days_updated','total_water_m3','score']]
-    worst_table = metrics_df.tail(10).sort_values(by='score', ascending=True)[['Rank','jalmitra','days_updated','total_water_m3','score']]
+    # Assign random scheme names
+    metrics_df['Scheme Name'] = [random.choice(village_names) + " PWSS" for _ in range(len(metrics_df))]
+
+    top_table = metrics_df.head(10)[['Rank','jalmitra','Scheme Name','days_updated','total_water_m3','score']]
+    worst_table = metrics_df.tail(10).sort_values(by='score', ascending=True)[['Rank','jalmitra','Scheme Name','days_updated','total_water_m3','score']]
 
     col_t, col_w = st.columns([1,1])
     with col_t:
@@ -308,6 +309,9 @@ else:
 
 st.markdown("---")
 
+# ---------------------------
+# Export Section
+# ---------------------------
 st.subheader("📤 Export Snapshot")
 st.download_button("Download Schemes CSV", schemes_df.to_csv(index=False).encode('utf-8'), "schemes_snapshot.csv")
 st.download_button("Download Readings CSV", readings_df.to_csv(index=False).encode('utf-8'), "readings_snapshot.csv")
@@ -317,4 +321,3 @@ except Exception:
     st.info("Metrics CSV not available (no data).")
 
 st.success(f"Dashboard ready for SO: {so_name}. Demo data generated: {st.session_state.get('demo_generated', False)} ✅")
-

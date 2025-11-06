@@ -1,7 +1,6 @@
 # jjm_demo_app.py
-# Unified Streamlit app with Plotly (session-state) — Weighted ranking restored
-# - Ranking = weighted average of (days updated) and (total water)
-# - Single slider: Frequency weight (%) — default 50%. Quantity weight = 100 - freq.
+# Unified Streamlit app with Plotly (session-state) — Locked weights 50/50
+# - Ranking = 50% days-updated + 50% total-water (no slider)
 # - Session-state storage, Plotly chart, Top/Worst tables, CSV export.
 
 import streamlit as st
@@ -16,13 +15,13 @@ from typing import Tuple
 # ---------------------------
 # Page config
 # ---------------------------
-st.set_page_config(page_title="JJM Unified Dashboard (Weighted Ranking)", layout="wide")
+st.set_page_config(page_title="JJM Unified Dashboard (Weighted 50/50)", layout="wide")
 try:
     st.image("logo.jpg", width=160)
 except Exception:
     pass
 st.title("Jal Jeevan Mission — Unified Dashboard")
-st.markdown("Ranking uses a weighted average of days-updated and total water. Adjust the Frequency weight below.")
+st.markdown("Ranking uses equal weights: 50% frequency (days updated) + 50% quantity (total water).")
 st.markdown("---")
 
 # ---------------------------
@@ -310,16 +309,14 @@ else:
     st.plotly_chart(fig, use_container_width=True, height=420)
 
 # ---------------------------
-# Top / Worst Jalmitra Rankings (Last 7 days) — weighted scoring
+# Top / Worst Jalmitra Rankings (Last 7 days) — 50/50 fixed weights
 # ---------------------------
 st.markdown("---")
-st.subheader("🏅 Jalmitra Performance Rankings (Last 7 Days) — Weighted Score")
+st.subheader("🏅 Jalmitra Performance Rankings (Last 7 Days) — 50% Frequency + 50% Quantity")
 
-# Slider to control frequency weight (0-100); quantity weight = 100 - freq
-freq_weight_pct = st.slider("Frequency weight (%) — importance of days with updates", min_value=0, max_value=100, value=50, step=5)
-st.markdown(f"**Quantity weight (%) = {100 - freq_weight_pct}%**")
-weight_freq = freq_weight_pct / 100.0
-weight_qty = 1.0 - weight_freq
+# Fixed weights
+weight_freq = 0.5
+weight_qty = 0.5
 
 if metrics_cached.empty and not last7_all.empty:
     metrics_df = last7_all.groupby('jalmitra').agg(
@@ -346,7 +343,7 @@ metrics_df['days_norm'] = metrics_df['days_updated'] / 7.0
 max_qty = metrics_df['total_water_m3'].max() if not metrics_df['total_water_m3'].empty else 0.0
 metrics_df['qty_norm'] = metrics_df['total_water_m3'] / max_qty if max_qty > 0 else 0.0
 
-# Weighted score using UI slider
+# Weighted score (50/50)
 metrics_df['score'] = metrics_df['days_norm'] * weight_freq + metrics_df['qty_norm'] * weight_qty
 
 metrics_df = metrics_df.sort_values(by=['score','total_water_m3'], ascending=False).reset_index(drop=True)
@@ -400,8 +397,8 @@ with st.expander("ℹ️ How ranking is computed (click to expand)"):
     - Normalized:
       - `days_norm = days_updated / 7`
       - `qty_norm = total_water / max_total_water`
-    - **Score = {weight_freq:.2f} * days_norm + {weight_qty:.2f} * qty_norm**
-    - Adjust the **Frequency weight (%)** slider above to change importance. Quantity weight is complementary.
+    - **Score = 0.50 * days_norm + 0.50 * qty_norm**
+    - Top table sorts by score descending; Worst table sorts by score ascending.
     """)
 
 st.markdown("---")

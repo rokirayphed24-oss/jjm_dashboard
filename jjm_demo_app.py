@@ -1,9 +1,10 @@
 # jjm_demo_app.py
-# Unified Streamlit app — Overview layout updated:
+# Unified Streamlit app — Overview layout updated (7-day chart removed)
 # - Left: Scheme Functionality pie
 # - Right: Jalmitra Updates pie (today)
 # - Below those pies: Top 10 (green) and Worst 10 (red; darkest red for worst)
-# - Session-state storage, Plotly 7-day chart, CSV export, etc.
+# - Session-state storage, CSV export, etc.
+# NOTE: I removed the "Last 7 Days — Water Supplied (m³) for Functional Schemes" chart options block as requested.
 
 import streamlit as st
 import pandas as pd
@@ -26,6 +27,26 @@ except Exception:
 st.title("Jal Jeevan Mission — Unified Dashboard")
 st.markdown("Overview: scheme functionality and jalmitra updates side-by-side; Top & Worst lists below them.")
 st.markdown("---")
+
+# ---------------------------
+# Defensive helper: ensure required columns
+# ---------------------------
+def ensure_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    """
+    Ensure dataframe has the requested columns. If missing, add with safe defaults.
+    Returns the dataframe (possibly modified).
+    """
+    if df is None:
+        df = pd.DataFrame(columns=cols)
+    for c in cols:
+        if c not in df.columns:
+            if c in ("id", "scheme_id", "reading"):
+                df[c] = 0
+            elif c == "water_quantity":
+                df[c] = 0.0
+            else:
+                df[c] = ""
+    return df
 
 # ---------------------------
 # Session state initialization
@@ -96,9 +117,10 @@ def generate_demo_data(total_schemes: int = 20, so_name: str = "SO-Guwahati"):
     # Insert readings for functional schemes only
     readings_rows = []
     for idx, row in st.session_state["schemes"].reset_index().iterrows():
-        if row["functionality"] != "Functional":
+        # defensive read: ensure 'functionality' exists on row
+        if row.get("functionality", "") != "Functional":
             continue
-        scheme_id = row["id"]
+        scheme_id = row.get("id", None)
         jalmitra = jalmitras[idx % len(jalmitras)]
         for d in range(7):
             date = (today - datetime.timedelta(days=d)).isoformat()
@@ -124,11 +146,25 @@ def compute_metrics_and_pivot(readings_df: pd.DataFrame, schemes_df: pd.DataFram
     Returns:
       - last7_all: merged readings for functional schemes in the date window
       - metrics: per-jalmitra metrics (days_updated, total_water_m3, schemes_covered)
+    Defensive: ensures required columns before merging/selecting.
     """
+    # ensure dataframes exist and have expected columns
+    if readings_df is None or schemes_df is None:
+        return pd.DataFrame(), pd.DataFrame()
+
+    readings_df = ensure_columns(readings_df.copy(), ["id", "scheme_id", "jalmitra", "reading", "reading_date", "reading_time", "water_quantity"])
+    schemes_df = ensure_columns(schemes_df.copy(), ["id", "scheme_name", "functionality", "so_name"])
+
     if readings_df.empty or schemes_df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
+    # safe merge (both sides have columns ensured)
     merged = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left')
+
+    # defensive creation of reading_date as string if necessary
+    if 'reading_date' not in merged.columns:
+        merged['reading_date'] = ""
+
     mask = (merged['functionality'] == 'Functional') & (merged['so_name'] == so_name) & (merged['reading_date'] >= start_date) & (merged['reading_date'] <= end_date)
     last7_all = merged.loc[mask].copy()
 
@@ -188,9 +224,10 @@ if role == "Executive Engineer":
 st.header("Section Officer Dashboard")
 so_name = "SO-Guwahati"
 
-schemes_df = st.session_state["schemes"].copy()
-readings_df = st.session_state["readings"].copy()
-jalmitras_list = st.session_state["jalmitras"]
+# defensively read session-state data and ensure columns
+schemes_df = ensure_columns(st.session_state.get("schemes", pd.DataFrame()).copy(), ["id", "scheme_name", "functionality", "so_name"])
+readings_df = ensure_columns(st.session_state.get("readings", pd.DataFrame()).copy(), ["id", "scheme_id", "jalmitra", "reading", "reading_date", "reading_time", "water_quantity"])
+jalmitras_list = st.session_state.get("jalmitras", [])
 
 if schemes_df.empty:
     st.info("No schemes found. Generate demo data to populate the dashboard.")
@@ -209,16 +246,26 @@ if img_path.exists():
     except Exception:
         pass
 
-# Prepare data for pies
+# Prepare data for pies (ensure columns present)
+schemes_df = ensure_columns(schemes_df, ["id","scheme_name","functionality","so_name"])
+readings_df = ensure_columns(readings_df, ["id","scheme_id","jalmitra","reading","reading_date","reading_time","water_quantity"])
+
 func_counts = schemes_df['functionality'].value_counts()
-# compute today's updates counts (for functional schemes)
+
+# compute today's updates counts (for functional schemes) safely
 today = datetime.date.today().isoformat()
-merged_today = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left')
+
+# safe merge: both dfs have the right columns
+merged_today = readings_df.merge(schemes_df[['id','scheme_name','functionality','so_name']], left_on='scheme_id', right_on='id', how='left') if not readings_df.empty else pd.DataFrame(columns=list(readings_df.columns)+['scheme_name','functionality','so_name'])
+# ensure merged_today has the columns we access
+merged_today = ensure_columns(merged_today, ['reading_date','functionality','so_name','jalmitra','scheme_name'])
+
 today_updates = merged_today[
     (merged_today['reading_date'] == today) &
     (merged_today['functionality'] == 'Functional') &
     (merged_today['so_name'] == so_name)
-]
+] if not merged_today.empty else pd.DataFrame(columns=merged_today.columns)
+
 updated_count = int(today_updates['jalmitra'].nunique()) if not today_updates.empty else 0
 total_functional = int(len(schemes_df[schemes_df['functionality'] == 'Functional']))
 absent_count = max(total_functional - updated_count, 0)
@@ -228,6 +275,9 @@ col_left, col_right = st.columns([1,1])
 
 with col_left:
     st.markdown("#### Scheme Functionality")
+    # defensive: if func_counts empty show neutral pie
+    if func_counts.empty:
+        func_counts = pd.Series({"Functional":0,"Non-Functional":0})
     fig1 = px.pie(names=func_counts.index, values=func_counts.values, title="", hole=0.3,
                   color=func_counts.index, color_discrete_map={"Functional":"#4CAF50","Non-Functional":"#F44336"})
     fig1.update_traces(textinfo='percent+label')
@@ -261,6 +311,9 @@ st.subheader("🏅 Jalmitra Performance — Top & Worst (Last 7 Days)")
 start_date = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
 end_date = today
 last7_all, metrics_cached = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
+
+# ensure metrics_df exists to avoid NameError later
+metrics_df = pd.DataFrame()
 
 if last7_all.empty:
     st.info("No readings in the last 7 days for functional schemes. Generate demo data to see rankings.")
@@ -334,46 +387,8 @@ else:
 st.markdown("---")
 
 # ---------------------------
-# 7-day line chart and rest of dashboard unchanged
+# The 7-day chart section was removed per your request.
 # ---------------------------
-st.subheader("📈 Last 7 Days — Water Supplied (m³) for Functional Schemes")
-last7_all2, metrics_cached2 = compute_metrics_and_pivot(readings_df, schemes_df, so_name, start_date, end_date)
-
-if last7_all2.empty:
-    st.info("No readings for the last 7 days for functional schemes.")
-else:
-    last_week_qty = last7_all2.groupby(['reading_date','scheme_name'])['water_quantity'].sum().reset_index()
-    pivot_chart = last_week_qty.pivot(index='reading_date', columns='scheme_name', values='water_quantity').fillna(0)
-    pivot_chart = pivot_chart.sort_index()
-
-    st.markdown("**Chart options**")
-    colc1, colc2 = st.columns([2,1])
-    with colc1:
-        show_total = st.checkbox("Also show total (sum of all functional schemes)", value=True)
-        top_k = st.selectbox("Show top N schemes by total water (last 7 days) or 'All'", options=["All","Top 5","Top 10","Top 15"], index=1)
-    with colc2:
-        date_order = st.radio("Date order", options=["Ascending","Descending"], index=0)
-
-    scheme_sums = last_week_qty.groupby('scheme_name')['water_quantity'].sum().sort_values(ascending=False)
-    if top_k == "All":
-        selected_schemes = scheme_sums.index.tolist()
-    else:
-        k = int(top_k.split()[1])
-        selected_schemes = scheme_sums.head(k).index.tolist()
-
-    plot_df = last_week_qty[last_week_qty['scheme_name'].isin(selected_schemes)].copy()
-    if show_total:
-        total_df = last_week_qty.groupby('reading_date')['water_quantity'].sum().reset_index()
-        total_df['scheme_name'] = 'Total (all)'
-        plot_df = pd.concat([plot_df, total_df], ignore_index=True)
-
-    fig = px.line(plot_df, x='reading_date', y='water_quantity', color='scheme_name',
-                  labels={'reading_date': 'Date', 'water_quantity': 'Water (m³)', 'scheme_name': 'Scheme'},
-                  markers=True, title="Water Supplied (m³) — last 7 days")
-    fig.update_layout(legend_title_text='Scheme / Total')
-    if date_order == "Descending":
-        fig.update_xaxes(categoryorder='array', categoryarray=sorted(plot_df['reading_date'].unique(), reverse=True))
-    st.plotly_chart(fig, use_container_width=True, height=420)
 
 st.markdown("---")
 st.subheader("Export Snapshot")
@@ -382,6 +397,7 @@ st.download_button("Download Schemes CSV", schemes_df.to_csv(index=False).encode
 st.download_button("Download Readings CSV", readings_df.to_csv(index=False).encode('utf-8'), file_name='readings_snapshot.csv', mime='text/csv')
 # metrics_df might be undefined if no last7_all; guard by using metrics_df if present
 try:
+    # if metrics_df empty, this will raise or produce empty CSV — handled gracefully
     st.download_button("Download Metrics CSV", metrics_df.to_csv(index=False).encode('utf-8'), file_name='metrics_snapshot.csv', mime='text/csv')
 except Exception:
     st.info("Metrics CSV not available (no data).")

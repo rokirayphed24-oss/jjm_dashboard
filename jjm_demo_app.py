@@ -1,11 +1,12 @@
 # jjm_demo_app.py
-# JJM Dashboard — Full app with period filter (7/15/30 days) and per-scheme ideal water
+# JJM Dashboard — Full app with period filter (7/15/30 days) corrected
 # - SO = ROKI RAY
 # - Demo data generator (Assamese names), per-scheme ideal_per_day (20-100 m³)
+# - Generates readings for last 30 days so 7/15/30 filters have data
 # - compute_metrics supports arbitrary window length and returns ideal totals + quantity_score
 # - Top/Worst tables include Ideal Water (m³) and use 50% days + 50% quantity_score
 # - BFM Readings Updated Today table preserved
-# - All UI & exports present, unique widget keys to avoid duplicate key errors
+# - Unique widget keys to avoid duplicate key errors
 
 import streamlit as st
 import pandas as pd
@@ -64,8 +65,8 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
     """
     Generate demo:
     - Schemes with ideal_per_day (20-100 m³)
-    - For Functional schemes, generate up to `FIXED_UPDATE_PROB` readings per day for the last 7 days
-    - Jalmitra names from Assamese name list
+    - For Functional schemes, generate readings for the last 30 days with fixed update probability
+    - Jalmitra names from Assamese list
     """
     FIXED_UPDATE_PROB = 0.85
     assamese = [
@@ -73,7 +74,10 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
         "Pranjal","Rupam","Dilip","Utpal","Amit","Jayanta","Hemanta","Rituraj","Dipankar",
         "Bikash","Dhruba","Subham","Pritam","Saurav","Bijoy","Manoj"
     ]
-    jalmitras = random.sample(assamese * 3, total_schemes)
+    # ensure enough unique names
+    jalmitras = (assamese * 5)[:max(total_schemes, len(assamese))]
+    random.shuffle(jalmitras)
+    jalmitras = jalmitras[:total_schemes]
     villages = [
         "Rampur","Kahikuchi","Dalgaon","Guwahati","Boko","Moran","Tezpur","Sibsagar",
         "Jorhat","Hajo","Tihu","Kokrajhar","Nalbari","Barpeta","Rangia","Goalpara","Dhemaji",
@@ -96,20 +100,22 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
             "ideal_per_day": ideal_per_day
         })
 
-    # create readings for functional schemes only; cap water_quantity to 100 and round to 2 decimals
+    # create readings for functional schemes only; create for last 30 days
+    days_to_generate = 30
     for i, s in enumerate(schemes):
         if s["functionality"] != "Functional":
             continue
         scheme_label = random.choice(villages) + " PWSS"
         jalmitra = jalmitras[i % len(jalmitras)]
-        for d in range(7):  # create values for last 7 days
+        for d in range(days_to_generate):
             date_iso = (today - datetime.timedelta(days=d)).isoformat()
             if random.random() < FIXED_UPDATE_PROB:
-                # morning times 6:00 AM - 11:45 AM
+                # morning times 6:00 AM - 11:45 AM in 12-hour format
                 hour = random.randint(6, 11)
                 minute = random.choice([0, 15, 30, 45])
                 ampm = "AM"
                 time_str = f"{hour}:{minute:02d} {ampm}"
+                # cap per-reading water <= 100
                 water_qty = round(random.uniform(10.0, 100.0), 2)
                 readings.append({
                     "id": len(readings) + 1,
@@ -155,7 +161,7 @@ def compute_metrics(readings: pd.DataFrame, schemes: pd.DataFrame, so: str, star
     if lastN.empty:
         return lastN, pd.DataFrame()
 
-    # determine number of days in window inclusive
+    # number of days in the inclusive window
     try:
         days_count = (pd.to_datetime(end) - pd.to_datetime(start)).days + 1
         if days_count <= 0:
@@ -173,6 +179,8 @@ def compute_metrics(readings: pd.DataFrame, schemes: pd.DataFrame, so: str, star
         schemes_covered=("scheme_id", lambda x: x.nunique())
     ).reset_index()
 
+    # compute ideal_total for the window for each jalmitra:
+    # sum of distinct schemes' ideal_per_day * days_count
     scheme_ideal = lastN[["jalmitra","scheme_id","ideal_per_day"]].drop_duplicates(subset=["jalmitra","scheme_id"])
     scheme_ideal["ideal_Nd"] = scheme_ideal["ideal_per_day"] * float(days_count)
     ideal_sum = scheme_ideal.groupby("jalmitra")["ideal_Nd"].sum().reset_index().rename(columns={"ideal_Nd":"ideal_total_Nd"})
@@ -180,7 +188,7 @@ def compute_metrics(readings: pd.DataFrame, schemes: pd.DataFrame, so: str, star
     metrics = agg.merge(ideal_sum, on="jalmitra", how="left")
     metrics["ideal_total_Nd"] = metrics["ideal_total_Nd"].fillna(0.0).round(2)
 
-    # quantity score fraction of ideal achieved (0..1)
+    # quantity score: fraction of ideal achieved (0..1)
     def compute_qs(row):
         ideal = row["ideal_total_Nd"]
         water = row["total_water_m3"]
@@ -193,7 +201,7 @@ def compute_metrics(readings: pd.DataFrame, schemes: pd.DataFrame, so: str, star
     metrics["total_water_m3"] = metrics["total_water_m3"].astype(float).round(2)
     metrics["quantity_score"] = metrics["quantity_score"].astype(float).round(3)
 
-    # attach days_count as attribute for caller convenience
+    # attach window days count to metrics attrs for caller convenience
     metrics.attrs["days_count"] = days_count
 
     return lastN, metrics
@@ -298,7 +306,7 @@ st.markdown("---")
 
 # --------------------------- Rankings ---------------------------
 st.subheader("🏅 Jalmitra Performance — Top & Worst")
-# Period selector
+# Period selector (7/15/30)
 period = st.selectbox("Show performance for", [7, 15, 30], index=0, format_func=lambda x: f"{x} days")
 start_date = (today - datetime.timedelta(days=period-1)).isoformat()
 end_date = today_iso
@@ -308,6 +316,7 @@ lastN, metrics = compute_metrics(readings, schemes, so, start_date, end_date)
 if lastN.empty or metrics.empty:
     st.info(f"No readings in the last {period} days.")
 else:
+    # days_norm uses selected period
     metrics["days_norm"] = metrics["days_updated"] / float(period)
     metrics["score"] = (0.5 * metrics["days_norm"]) + (0.5 * metrics["quantity_score"])
     metrics = metrics.sort_values(by=["score","total_water_m3"], ascending=False).reset_index(drop=True)
@@ -318,6 +327,7 @@ else:
     rnd = random.Random(42)
     metrics["Scheme Name"] = [rnd.choice(villages) + " PWSS" for _ in range(len(metrics))]
 
+    # Ensure ideal_total_Nd present (value already computed for the chosen window)
     metrics["ideal_total_Nd"] = metrics.get("ideal_total_Nd", 0.0).round(2)
 
     top_table = metrics.head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","ideal_total_Nd","score"]].copy()
@@ -373,7 +383,7 @@ if st.session_state.get("selected_jalmitra"):
     jm = st.session_state["selected_jalmitra"]
     st.markdown("---")
     st.subheader(f"Performance — {jm}")
-    # recompute for selected window (use the same period)
+    # recompute for selected window (use same period)
     last_window, _ = compute_metrics(readings, schemes, so, start_date, end_date)
     jm_data = last_window[last_window["jalmitra"] == jm] if (not last_window.empty) else pd.DataFrame()
     if jm_data.empty:

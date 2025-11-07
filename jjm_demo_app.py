@@ -117,68 +117,19 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
     st.success("✅ Demo data generated for ROKI RAY.")
 
 # --------------------------- Metrics computation ---------------------------
-def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
-    FIXED_UPDATE_PROB = 0.85
-    assamese = [
-        "Biren","Nagen","Rahul","Vikram","Debojit","Anup","Kamal","Ranjit","Himangshu",
-        "Pranjal","Rupam","Dilip","Utpal","Amit","Jayanta","Hemanta","Rituraj","Dipankar",
-        "Bikash","Dhruba","Subham","Pritam","Saurav","Bijoy","Manoj"
-    ]
-    jalmitras = random.sample(assamese * 3, total_schemes)
-    villages = [
-        "Rampur","Kahikuchi","Dalgaon","Guwahati","Boko","Moran","Tezpur","Sibsagar",
-        "Jorhat","Hajo","Tihu","Kokrajhar","Nalbari","Barpeta","Rangia","Goalpara","Dhemaji",
-        "Dibrugarh","Mariani","Sonari"
-    ]
-
-    today = datetime.date.today()
-    readings = []
-    schemes = []
-    reading_samples = [110010,215870,150340,189420,200015,234870]
-
-    # create schemes and assign an ideal_per_day (random up to 100 m³)
-    for i in range(total_schemes):
-        ideal_per_day = round(random.uniform(20.0, 100.0), 2)  # per-scheme ideal daily (20-100)
-        schemes.append({
-            "id": i+1,
-            "scheme_name": f"Scheme {chr(65 + (i % 26))}{'' if i < 26 else i//26}",
-            "functionality": random.choice(["Functional","Non-Functional"]),
-            "so_name": so_name,
-            "ideal_per_day": ideal_per_day
-        })
-
-    # create readings for functional schemes only; cap water_quantity to 100 and round to 2 decimals
-    for i, s in enumerate(schemes):
-        if s["functionality"] != "Functional":
-            continue
-        scheme_label = random.choice(villages) + " PWSS"
-        jalmitra = jalmitras[i % len(jalmitras)]
-        for d in range(7):
-            date_iso = (today - datetime.timedelta(days=d)).isoformat()
-            if random.random() < FIXED_UPDATE_PROB:
-                # mostly morning times (6:00 AM - 11:45 AM) in 12-hour format
-                hour = random.randint(6, 11)
-                minute = random.choice([0, 15, 30, 45])
-                ampm = "AM"
-                time_str = f"{hour}:{minute:02d} {ampm}"
-                water_qty = round(random.uniform(10.0, 100.0), 2)  # capped at 100
-                readings.append({
-                    "id": len(readings) + 1,
-                    "scheme_id": s["id"],
-                    "jalmitra": jalmitra,
-                    "reading": random.choice(reading_samples),
-                    "reading_date": date_iso,
-                    "reading_time": time_str,
-                    "water_quantity": water_qty,
-                    "scheme_name": scheme_label
-                })
-
-    # persist into session state
-    st.session_state["schemes"] = pd.DataFrame(schemes)
-    st.session_state["readings"] = pd.DataFrame(readings)
-    st.session_state["jalmitras"] = jalmitras
-    st.session_state["demo_generated"] = True
-    st.success("✅ Demo data generated for ROKI RAY.")
+@st.cache_data
+def compute_metrics(readings: pd.DataFrame, schemes: pd.DataFrame, so: str, start: str, end: str):
+    r = ensure_columns(readings.copy(), ["id","scheme_id","jalmitra","reading","reading_date","reading_time","water_quantity","scheme_name"])
+    s = ensure_columns(schemes.copy(), ["id","scheme_name","functionality","so_name"])
+    merged = r.merge(s[["id","scheme_name","functionality","so_name"]], left_on="scheme_id", right_on="id", how="left", suffixes=("_reading","_scheme"))
+    mask = (merged["functionality"] == "Functional") & (merged["so_name"] == so) & (merged["reading_date"] >= start) & (merged["reading_date"] <= end)
+    last7 = merged.loc[mask].copy()
+    if last7.empty:
+        return last7, pd.DataFrame()
+    last7["water_quantity"] = pd.to_numeric(last7["water_quantity"], errors="coerce").fillna(0.0).round(2)
+    metrics = last7.groupby("jalmitra").agg(days_updated=("reading_date", lambda x: x.nunique()), total_water_m3=("water_quantity","sum")).reset_index()
+    metrics["total_water_m3"] = metrics["total_water_m3"].round(2)
+    return last7, metrics
 
 # --------------------------- Demo data UI ---------------------------
 st.markdown("### 🧪 Demo Data Management")
@@ -409,4 +360,3 @@ except Exception:
     st.info("Metrics CSV not available.")
 
 st.success(f"Dashboard ready for SO {so}. Demo data generated: {st.session_state['demo_generated']}")
-

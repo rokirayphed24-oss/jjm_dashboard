@@ -305,9 +305,8 @@ else:
 st.markdown("---")
 
 # --------------------------- Rankings ---------------------------
-# --------------------------- Rankings ---------------------------
 st.subheader("🏅 Jalmitra Performance — Top & Worst")
-# Period selector
+# Period selector (7/15/30)
 period = st.selectbox("Show performance for", [7, 15, 30], index=0, format_func=lambda x: f"{x} days")
 start_date = (today - datetime.timedelta(days=period-1)).isoformat()
 end_date = today_iso
@@ -317,28 +316,27 @@ lastN, metrics = compute_metrics(readings, schemes, so, start_date, end_date)
 if lastN.empty or metrics.empty:
     st.info(f"No readings in the last {period} days.")
 else:
-    # normalize days by chosen period and compute score using quantity_score
+    # days_norm uses selected period
     metrics["days_norm"] = metrics["days_updated"] / float(period)
     metrics["score"] = (0.5 * metrics["days_norm"]) + (0.5 * metrics["quantity_score"])
     metrics = metrics.sort_values(by=["score","total_water_m3"], ascending=False).reset_index(drop=True)
     metrics["Rank"] = metrics.index + 1
 
-    # add deterministic scheme display name for UI
+    # deterministic scheme names for display
     villages = ["Rampur","Kahikuchi","Dalgaon","Guwahati","Boko","Moran","Tezpur","Sibsagar","Jorhat","Hajo"]
     rnd = random.Random(42)
     metrics["Scheme Name"] = [rnd.choice(villages) + " PWSS" for _ in range(len(metrics))]
 
-    # Ensure ideal_total_Nd present (computed for selected window)
+    # Ensure ideal_total_Nd present (value already computed for the chosen window)
     metrics["ideal_total_Nd"] = metrics.get("ideal_total_Nd", 0.0).round(2)
 
-    # build Top and Worst tables (styled) for visual fidelity
     top_table = metrics.head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","ideal_total_Nd","score"]].copy()
     top_table.columns = ["Rank","Jalmitra","Scheme Name",f"Days Updated (last {period}d)","Total Water (m³)","Ideal Water (m³)","Score"]
 
     worst_table = metrics.sort_values(by='score', ascending=True).head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","ideal_total_Nd","score"]].copy()
     worst_table.columns = ["Rank","Jalmitra","Scheme Name",f"Days Updated (last {period}d)","Total Water (m³)","Ideal Water (m³)","Score"]
 
-    # show styled DataFrames (keeps previous look)
+    # styled tables
     col_t, col_w = st.columns([1,1])
     with col_t:
         st.markdown(f"### 🟢 Top 10 Performing Jalmitras — last {period} days")
@@ -349,48 +347,43 @@ else:
         st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}","Ideal Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=[f"Days Updated (last {period}d)","Total Water (m³)","Score"], cmap="Reds_r"), height=360)
         st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode("utf-8"), "worst_10_jalmitras.csv")
 
-    # --- Clickable rows: render compact, tappable rows under each table ---
-    st.markdown("**Tap the row (name) to view the performance chart**")
+    # clickable names below tables (unique keys include period)
+    st.markdown("**Tap a name below to open the performance chart**")
+    top_names = top_table["Jalmitra"].tolist()
+    worst_names = worst_table["Jalmitra"].tolist()
 
-    # Top clickable rows (compact)
-    st.markdown("**Top 10 — Tap a row**")
-    for i, row in top_table.reset_index(drop=True).iterrows():
-        cols = st.columns([0.08, 0.28, 0.22, 0.12, 0.12, 0.12, 0.08])
-        # Rank
-        cols[0].markdown(f"**{row['Rank']}**")
-        # Name as a button inside the row
-        if cols[1].button(row["Jalmitra"], key=f"row_top_{period}_{i}_{row['Jalmitra']}"):
-            st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == row["Jalmitra"] else row["Jalmitra"]
-        # Other columns (scheme, days, water, ideal, score)
-        cols[2].markdown(row["Scheme Name"])
-        cols[3].markdown(str(row[f"Days Updated (last {period}d)"]))
-        cols[4].markdown(f"{row['Total Water (m³)']:.2f}")
-        cols[5].markdown(f"{row['Ideal Water (m³)']:.2f}")
-        cols[6].markdown(f"{row['Score']:.3f}")
+    if view_mode == "Web View":
+        with st.container():
+            st.markdown("**Top 10 — Tap name**")
+            if top_names:
+                cols = st.columns(len(top_names))
+                for i, name in enumerate(top_names):
+                    if cols[i].button(name, key=f"btn_top_{period}_{i}_{name}"):
+                        st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == name else name
 
-    st.markdown("---")
+        with st.container():
+            st.markdown("**Worst 10 — Tap name**")
+            if worst_names:
+                cols = st.columns(len(worst_names))
+                for i, name in enumerate(worst_names):
+                    if cols[i].button(name, key=f"btn_worst_{period}_{i}_{name}"):
+                        st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == name else name
+    else:
+        st.markdown("**Top 10 — Tap a name**")
+        for i, name in enumerate(top_names):
+            if st.button(name, key=f"pbtn_top_{period}_{i}_{name}"):
+                st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == name else name
+        st.markdown("**Worst 10 — Tap a name**")
+        for i, name in enumerate(worst_names):
+            if st.button(name, key=f"pbtn_worst_{period}_{i}_{name}"):
+                st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == name else name
 
-    # Worst clickable rows (compact)
-    st.markdown("**Worst 10 — Tap a row**")
-    for i, row in worst_table.reset_index(drop=True).iterrows():
-        cols = st.columns([0.08, 0.28, 0.22, 0.12, 0.12, 0.12, 0.08])
-        cols[0].markdown(f"**{row['Rank']}**")
-        if cols[1].button(row["Jalmitra"], key=f"row_worst_{period}_{i}_{row['Jalmitra']}"):
-            st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == row["Jalmitra"] else row["Jalmitra"]
-        cols[2].markdown(row["Scheme Name"])
-        cols[3].markdown(str(row[f"Days Updated (last {period}d)"]))
-        cols[4].markdown(f"{row['Total Water (m³)']:.2f}")
-        cols[5].markdown(f"{row['Ideal Water (m³)']:.2f}")
-        cols[6].markdown(f"{row['Score']:.3f}")
-
-
-# --------------------------- Show performance chart when name selected ---------------------------
 # --------------------------- Show performance chart when name selected ---------------------------
 if st.session_state.get("selected_jalmitra"):
     jm = st.session_state["selected_jalmitra"]
     st.markdown("---")
     st.subheader(f"Performance — {jm}")
-    # recompute for selected window (use same start_date/end_date from Rankings above)
+    # recompute for selected window (use same period)
     last_window, _ = compute_metrics(readings, schemes, so, start_date, end_date)
     jm_data = last_window[last_window["jalmitra"] == jm] if (not last_window.empty) else pd.DataFrame()
     if jm_data.empty:
@@ -399,24 +392,52 @@ if st.session_state.get("selected_jalmitra"):
         dates = [(datetime.date.today() - datetime.timedelta(days=d)).isoformat() for d in reversed(range(period))]
         daily = jm_data.groupby("reading_date")["water_quantity"].sum().reindex(dates, fill_value=0).reset_index()
         daily["water_quantity"] = daily["water_quantity"].round(2)
-
-        # Static chart using matplotlib (non-interactive, auto-scaled)
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(8, 3.5))
-        ax.bar(daily['reading_date'], daily['water_quantity'])
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Water (m³)")
-        ax.set_title(f"{jm} — Daily Water Supplied (Last {period} Days)")
-        ax.tick_params(axis='x', rotation=45)
-        plt.tight_layout()
-        st.pyplot(fig)
-
+        fig = px.bar(daily, x="reading_date", y="water_quantity",
+                     labels={"reading_date":"Date","water_quantity":"Water (m³)"},
+                     title=f"{jm} — Daily Water Supplied (Last {period} Days)")
+        st.plotly_chart(fig, use_container_width=True, height=380)
         st.markdown(f"**Total ({period} days):** {daily['water_quantity'].sum():.2f} m³  **Days Updated:** {(daily['water_quantity']>0).sum()}/{period}")
-
-    # Single close button below chart (same key to avoid duplicates)
+    # close button
     if view_mode == "Web View":
-        if st.button("Close View", key=f"close_view_{period}"):
+        if st.button("Close View"):
             st.session_state["selected_jalmitra"] = None
     else:
-        if st.button("Close View (Phone)", key=f"close_view_phone_{period}"):
+        if st.button("Close View (Phone)"):
             st.session_state["selected_jalmitra"] = None
+
+st.markdown("---")
+
+# --------------------------- BFM Readings Updated Today ---------------------------
+st.subheader("📅 BFM Readings Updated Today")
+if today_upd.empty:
+    st.info("No BFM readings recorded today.")
+else:
+    today_upd["Scheme Name"] = today_upd.get("Scheme Display", "")
+    today_upd["reading"] = pd.to_numeric(today_upd.get("reading", 0), errors="coerce").fillna(0).astype(int)
+    today_upd["water_quantity"] = pd.to_numeric(today_upd.get("water_quantity", 0.0), errors="coerce").fillna(0.0).round(2)
+    today_upd["BFM Reading Display"] = today_upd["reading"].apply(lambda x: f"{x:06d}")
+
+    # Build table with Reading Time immediately after Reading
+    daily_bfm = today_upd[["jalmitra","Scheme Display","BFM Reading Display","reading_time","water_quantity"]].copy()
+    daily_bfm.columns = ["Jalmitra","Scheme Name","BFM Reading","Reading Time","Water Quantity (m³)"]
+    daily_bfm = daily_bfm.sort_values("Jalmitra").reset_index(drop=True)
+    daily_bfm.insert(0, "S.No", range(1, len(daily_bfm)+1))
+
+    # Display with styling
+    try:
+        sty = daily_bfm.style.format({"Water Quantity (m³)":"{:.2f}"})
+        st.dataframe(sty.background_gradient(cmap="Blues", subset=["Water Quantity (m³)"]), height=360)
+    except Exception:
+        st.dataframe(daily_bfm, height=360)
+
+# --------------------------- Export ---------------------------
+st.markdown("---")
+st.subheader("📤 Export Snapshot")
+st.download_button("Schemes CSV", schemes.to_csv(index=False).encode("utf-8"), "schemes.csv")
+st.download_button("Readings CSV", readings.to_csv(index=False).encode("utf-8"), "readings.csv")
+try:
+    st.download_button("Metrics CSV", metrics.to_csv(index=False).encode("utf-8"), "metrics.csv")
+except Exception:
+    st.info("Metrics CSV not available.")
+
+st.success(f"Dashboard ready for SO {so}. Demo data generated: {st.session_state['demo_generated']}")

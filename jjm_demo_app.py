@@ -1,9 +1,12 @@
-
 # jjm_demo_app.py
-# JJM Dashboard — Duplicate-key bug fixed (unique keys for name buttons)
-# - Full app: Web/Phone view, Top/Worst styled tables, clickable name buttons (unique keys), 7-day view, BFM today's readings
-# - SO = ROKI RAY, per-reading water capped <=100, reading times in 12-hour morning format
-# - Added per-scheme ideal_per_day, ideal_total_7d and quantity_score; Top/Worst now show Ideal Water (m³)
+# JJM Dashboard — Full app with period filter (7/15/30 days) and per-scheme ideal water
+# - SO = ROKI RAY
+# - Demo data generator (Assamese names), per-scheme ideal_per_day (20-100 m³)
+# - compute_metrics supports arbitrary window length and returns ideal totals + quantity_score
+# - Top/Worst tables include Ideal Water (m³) and use 50% days + 50% quantity_score
+# - BFM Readings Updated Today table preserved
+# - All UI & exports present, unique widget keys to avoid duplicate key errors
+
 import streamlit as st
 import pandas as pd
 import datetime
@@ -11,9 +14,9 @@ import random
 import plotly.express as px
 
 # --------------------------- Page setup ---------------------------
-st.set_page_config(page_title="JJM Dashboard — Fixed Keys + Ideal", layout="wide")
+st.set_page_config(page_title="JJM Dashboard — Unified", layout="wide")
 st.title("Jal Jeevan Mission — Unified Dashboard")
-st.markdown("For Section Officer **ROKI RAY** — Tap a name (buttons) to view 7-day performance.")
+st.markdown("For Section Officer **ROKI RAY** — Tap a name (buttons) to view performance.")
 st.markdown("---")
 
 # --------------------------- View mode toggle ---------------------------
@@ -28,7 +31,7 @@ def ensure_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame:
         if c not in df.columns:
             if c in ("id", "scheme_id", "reading"):
                 df[c] = 0
-            elif c == "water_quantity" or c == "ideal_per_day":
+            elif c in ("water_quantity", "ideal_per_day"):
                 df[c] = 0.0
             else:
                 df[c] = ""
@@ -58,6 +61,12 @@ def reset_session_data():
     st.session_state["selected_jalmitra"] = None
 
 def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
+    """
+    Generate demo:
+    - Schemes with ideal_per_day (20-100 m³)
+    - For Functional schemes, generate up to `FIXED_UPDATE_PROB` readings per day for the last 7 days
+    - Jalmitra names from Assamese name list
+    """
     FIXED_UPDATE_PROB = 0.85
     assamese = [
         "Biren","Nagen","Rahul","Vikram","Debojit","Anup","Kamal","Ranjit","Himangshu",
@@ -93,10 +102,10 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
             continue
         scheme_label = random.choice(villages) + " PWSS"
         jalmitra = jalmitras[i % len(jalmitras)]
-        for d in range(7):
+        for d in range(7):  # create values for last 7 days
             date_iso = (today - datetime.timedelta(days=d)).isoformat()
             if random.random() < FIXED_UPDATE_PROB:
-                # mostly morning times (6:00 AM - 11:45 AM) in 12-hour format
+                # morning times 6:00 AM - 11:45 AM
                 hour = random.randint(6, 11)
                 minute = random.choice([0, 15, 30, 45])
                 ampm = "AM"
@@ -124,50 +133,56 @@ def generate_demo_data(total_schemes:int=20, so_name:str="ROKI RAY"):
 def compute_metrics(readings: pd.DataFrame, schemes: pd.DataFrame, so: str, start: str, end: str):
     """
     Returns:
-      - last7: merged readings (only functional schemes) in date window with scheme ideal_per_day attached
+      - lastN: merged readings (only functional schemes) in date window with scheme ideal_per_day attached
       - metrics: per-jalmitra metrics including:
-          days_updated, total_water_m3, schemes_covered, ideal_total_7d, quantity_score
+          days_updated, total_water_m3, schemes_covered, ideal_total_Nd, quantity_score
+    Note: ideal totals computed for the number of days in the window (end - start + 1).
     """
     r = ensure_columns(readings.copy(), ["id","scheme_id","jalmitra","reading","reading_date","reading_time","water_quantity","scheme_name"])
     s = ensure_columns(schemes.copy(), ["id","scheme_name","functionality","so_name","ideal_per_day"])
-    # Merge readings with scheme info (including ideal_per_day)
     merged = r.merge(
         s[["id","scheme_name","functionality","so_name","ideal_per_day"]],
         left_on="scheme_id", right_on="id", how="left", suffixes=("_reading","_scheme")
     )
-    # Filter functional schemes for the given SO and date window
+
     mask = (
         (merged["functionality"] == "Functional")
         & (merged["so_name"] == so)
         & (merged["reading_date"] >= start)
         & (merged["reading_date"] <= end)
     )
-    last7 = merged.loc[mask].copy()
-    if last7.empty:
-        return last7, pd.DataFrame()
+    lastN = merged.loc[mask].copy()
+    if lastN.empty:
+        return lastN, pd.DataFrame()
 
-    # Ensure numeric columns
-    last7["water_quantity"] = pd.to_numeric(last7["water_quantity"], errors="coerce").fillna(0.0).round(2)
-    last7["ideal_per_day"] = pd.to_numeric(last7.get("ideal_per_day", 0.0), errors="coerce").fillna(0.0)
+    # determine number of days in window inclusive
+    try:
+        days_count = (pd.to_datetime(end) - pd.to_datetime(start)).days + 1
+        if days_count <= 0:
+            days_count = 1
+    except Exception:
+        days_count = 7
 
-    # Aggregate per Jalmitra
-    agg = last7.groupby("jalmitra").agg(
+    # ensure numeric
+    lastN["water_quantity"] = pd.to_numeric(lastN["water_quantity"], errors="coerce").fillna(0.0).round(2)
+    lastN["ideal_per_day"] = pd.to_numeric(lastN.get("ideal_per_day", 0.0), errors="coerce").fillna(0.0)
+
+    agg = lastN.groupby("jalmitra").agg(
         days_updated=("reading_date", lambda x: x.nunique()),
         total_water_m3=("water_quantity", "sum"),
         schemes_covered=("scheme_id", lambda x: x.nunique())
     ).reset_index()
 
-    # Compute ideal total for 7 days per jalmitra (sum of distinct schemes' ideal * 7)
-    scheme_ideal = last7[["jalmitra","scheme_id","ideal_per_day"]].drop_duplicates(subset=["jalmitra","scheme_id"])
-    scheme_ideal["ideal_7d"] = scheme_ideal["ideal_per_day"] * 7.0
-    ideal_sum = scheme_ideal.groupby("jalmitra")["ideal_7d"].sum().reset_index().rename(columns={"ideal_7d":"ideal_total_7d"})
+    scheme_ideal = lastN[["jalmitra","scheme_id","ideal_per_day"]].drop_duplicates(subset=["jalmitra","scheme_id"])
+    scheme_ideal["ideal_Nd"] = scheme_ideal["ideal_per_day"] * float(days_count)
+    ideal_sum = scheme_ideal.groupby("jalmitra")["ideal_Nd"].sum().reset_index().rename(columns={"ideal_Nd":"ideal_total_Nd"})
 
     metrics = agg.merge(ideal_sum, on="jalmitra", how="left")
-    metrics["ideal_total_7d"] = metrics["ideal_total_7d"].fillna(0.0).round(2)
+    metrics["ideal_total_Nd"] = metrics["ideal_total_Nd"].fillna(0.0).round(2)
 
-    # Quantity score based on fraction of ideal achieved (capped at 1.0)
+    # quantity score fraction of ideal achieved (0..1)
     def compute_qs(row):
-        ideal = row["ideal_total_7d"]
+        ideal = row["ideal_total_Nd"]
         water = row["total_water_m3"]
         if ideal <= 0:
             return 0.0
@@ -178,7 +193,10 @@ def compute_metrics(readings: pd.DataFrame, schemes: pd.DataFrame, so: str, star
     metrics["total_water_m3"] = metrics["total_water_m3"].astype(float).round(2)
     metrics["quantity_score"] = metrics["quantity_score"].astype(float).round(3)
 
-    return last7, metrics
+    # attach days_count as attribute for caller convenience
+    metrics.attrs["days_count"] = days_count
+
+    return lastN, metrics
 
 # --------------------------- Demo data UI ---------------------------
 st.markdown("### 🧪 Demo Data Management")
@@ -242,6 +260,7 @@ updated_count = int(today_upd["jalmitra"].nunique()) if not today_upd.empty else
 total_functional = int(len(schemes[schemes["functionality"] == "Functional"]))
 absent_count = max(total_functional - updated_count, 0)
 
+# Pies
 if view_mode == "Web View":
     col1, col2 = st.columns(2)
     with col1:
@@ -278,15 +297,18 @@ else:
 st.markdown("---")
 
 # --------------------------- Rankings ---------------------------
-start_date = (today - datetime.timedelta(days=6)).isoformat()
+st.subheader("🏅 Jalmitra Performance — Top & Worst")
+# Period selector
+period = st.selectbox("Show performance for", [7, 15, 30], index=0, format_func=lambda x: f"{x} days")
+start_date = (today - datetime.timedelta(days=period-1)).isoformat()
 end_date = today_iso
-last7, metrics = compute_metrics(readings, schemes, so, start_date, end_date)
 
-if last7.empty:
-    st.info("No readings in last 7 days.")
+lastN, metrics = compute_metrics(readings, schemes, so, start_date, end_date)
+
+if lastN.empty or metrics.empty:
+    st.info(f"No readings in the last {period} days.")
 else:
-    # Use quantity_score (0..1) instead of normalizing by max total
-    metrics["days_norm"] = metrics["days_updated"] / 7.0
+    metrics["days_norm"] = metrics["days_updated"] / float(period)
     metrics["score"] = (0.5 * metrics["days_norm"]) + (0.5 * metrics["quantity_score"])
     metrics = metrics.sort_values(by=["score","total_water_m3"], ascending=False).reset_index(drop=True)
     metrics["Rank"] = metrics.index + 1
@@ -296,29 +318,27 @@ else:
     rnd = random.Random(42)
     metrics["Scheme Name"] = [rnd.choice(villages) + " PWSS" for _ in range(len(metrics))]
 
-    # include Ideal Water (m³) column (ideal_total_7d)
-    metrics["ideal_total_7d"] = metrics.get("ideal_total_7d", 0.0).round(2)
+    metrics["ideal_total_Nd"] = metrics.get("ideal_total_Nd", 0.0).round(2)
 
-    top_table = metrics.head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","ideal_total_7d","score"]].copy()
-    top_table.columns = ["Rank","Jalmitra","Scheme Name","Days Updated (last 7d)","Total Water (m³)","Ideal Water (m³)","Score"]
+    top_table = metrics.head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","ideal_total_Nd","score"]].copy()
+    top_table.columns = ["Rank","Jalmitra","Scheme Name",f"Days Updated (last {period}d)","Total Water (m³)","Ideal Water (m³)","Score"]
 
-    worst_table = metrics.sort_values(by='score', ascending=True).head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","ideal_total_7d","score"]].copy()
-    worst_table.columns = ["Rank","Jalmitra","Scheme Name","Days Updated (last 7d)","Total Water (m³)","Ideal Water (m³)","Score"]
+    worst_table = metrics.sort_values(by='score', ascending=True).head(10)[["Rank","jalmitra","Scheme Name","days_updated","total_water_m3","ideal_total_Nd","score"]].copy()
+    worst_table.columns = ["Rank","Jalmitra","Scheme Name",f"Days Updated (last {period}d)","Total Water (m³)","Ideal Water (m³)","Score"]
 
-    # show styled DataFrames (restored previous look)
+    # styled tables
     col_t, col_w = st.columns([1,1])
     with col_t:
-        st.markdown("### 🟢 Top 10 Performing Jalmitras")
-        st.dataframe(top_table.style.format({"Total Water (m³)":"{:.2f}","Ideal Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Greens"), height=360)
+        st.markdown(f"### 🟢 Top 10 Performing Jalmitras — last {period} days")
+        st.dataframe(top_table.style.format({"Total Water (m³)":"{:.2f}","Ideal Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=[f"Days Updated (last {period}d)","Total Water (m³)","Score"], cmap="Greens"), height=360)
         st.download_button("⬇️ Download Top 10 CSV", top_table.to_csv(index=False).encode("utf-8"), "top_10_jalmitras.csv")
     with col_w:
-        st.markdown("### 🔴 Worst 10 Performing Jalmitras")
-        st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}","Ideal Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=["Days Updated (last 7d)","Total Water (m³)","Score"], cmap="Reds_r"), height=360)
+        st.markdown(f"### 🔴 Worst 10 Performing Jalmitras — last {period} days")
+        st.dataframe(worst_table.style.format({"Total Water (m³)":"{:.2f}","Ideal Water (m³)":"{:.2f}","Score":"{:.3f}"}).background_gradient(subset=[f"Days Updated (last {period}d)","Total Water (m³)","Score"], cmap="Reds_r"), height=360)
         st.download_button("⬇️ Download Worst 10 CSV", worst_table.to_csv(index=False).encode("utf-8"), "worst_10_jalmitras.csv")
 
-    # --------------------------- Clickable name buttons (unique keys) ---------------------------
-    st.markdown("**Tap a name below to open the 7-day performance chart**")
-    # Top names row (unique keys prefixed top_)
+    # clickable names below tables (unique keys include period)
+    st.markdown("**Tap a name below to open the performance chart**")
     top_names = top_table["Jalmitra"].tolist()
     worst_names = worst_table["Jalmitra"].tolist()
 
@@ -328,8 +348,7 @@ else:
             if top_names:
                 cols = st.columns(len(top_names))
                 for i, name in enumerate(top_names):
-                    # unique key per position
-                    if cols[i].button(name, key=f"btn_top_{i}_{name}"):
+                    if cols[i].button(name, key=f"btn_top_{period}_{i}_{name}"):
                         st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == name else name
 
         with st.container():
@@ -337,44 +356,43 @@ else:
             if worst_names:
                 cols = st.columns(len(worst_names))
                 for i, name in enumerate(worst_names):
-                    if cols[i].button(name, key=f"btn_worst_{i}_{name}"):
+                    if cols[i].button(name, key=f"btn_worst_{period}_{i}_{name}"):
                         st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == name else name
     else:
-        # phone stacked buttons
         st.markdown("**Top 10 — Tap a name**")
         for i, name in enumerate(top_names):
-            if st.button(name, key=f"pbtn_top_{i}_{name}"):
+            if st.button(name, key=f"pbtn_top_{period}_{i}_{name}"):
                 st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == name else name
         st.markdown("**Worst 10 — Tap a name**")
         for i, name in enumerate(worst_names):
-            if st.button(name, key=f"pbtn_worst_{i}_{name}"):
+            if st.button(name, key=f"pbtn_worst_{period}_{i}_{name}"):
                 st.session_state["selected_jalmitra"] = None if st.session_state.get("selected_jalmitra") == name else name
 
-# --------------------------- Show 7-day chart when a name is selected ---------------------------
+# --------------------------- Show performance chart when name selected ---------------------------
 if st.session_state.get("selected_jalmitra"):
     jm = st.session_state["selected_jalmitra"]
     st.markdown("---")
-    st.subheader(f"7-day Performance — {jm}")
-    # recompute last7 if necessary
-    if 'last7' not in locals() or last7 is None:
-        last7, _ = compute_metrics(readings, schemes, so, start_date, end_date) if ('start_date' in locals() and 'end_date' in locals()) else compute_metrics(readings, schemes, so, (today - datetime.timedelta(days=6)).isoformat(), today_iso)
-    jm_data = last7[last7["jalmitra"] == jm] if (not last7.empty) else pd.DataFrame()
+    st.subheader(f"Performance — {jm}")
+    # recompute for selected window (use the same period)
+    last_window, _ = compute_metrics(readings, schemes, so, start_date, end_date)
+    jm_data = last_window[last_window["jalmitra"] == jm] if (not last_window.empty) else pd.DataFrame()
     if jm_data.empty:
-        st.info("No readings for this Jalmitra in the last 7 days.")
+        st.info("No readings for this Jalmitra in the selected window.")
     else:
-        dates = [(today - datetime.timedelta(days=d)).isoformat() for d in reversed(range(7))]
+        dates = [(datetime.date.today() - datetime.timedelta(days=d)).isoformat() for d in reversed(range(period))]
         daily = jm_data.groupby("reading_date")["water_quantity"].sum().reindex(dates, fill_value=0).reset_index()
         daily["water_quantity"] = daily["water_quantity"].round(2)
         fig = px.bar(daily, x="reading_date", y="water_quantity",
                      labels={"reading_date":"Date","water_quantity":"Water (m³)"},
-                     title=f"{jm} — Daily Water Supplied (Last 7 Days)")
+                     title=f"{jm} — Daily Water Supplied (Last {period} Days)")
         st.plotly_chart(fig, use_container_width=True, height=380)
-        st.markdown(f"**Total (7 days):** {daily['water_quantity'].sum():.2f} m³  **Days Updated:** {(daily['water_quantity']>0).sum()}/7")
+        st.markdown(f"**Total ({period} days):** {daily['water_quantity'].sum():.2f} m³  **Days Updated:** {(daily['water_quantity']>0).sum()}/{period}")
+    # close button
     if view_mode == "Web View":
-        if st.button("Close 7-day View"):
+        if st.button("Close View"):
             st.session_state["selected_jalmitra"] = None
     else:
-        if st.button("Close 7-day View (Phone)"):
+        if st.button("Close View (Phone)"):
             st.session_state["selected_jalmitra"] = None
 
 st.markdown("---")
@@ -384,13 +402,13 @@ st.subheader("📅 BFM Readings Updated Today")
 if today_upd.empty:
     st.info("No BFM readings recorded today.")
 else:
-    today_upd["Scheme Name"] = today_upd["Scheme Display"]
-    today_upd["reading"] = pd.to_numeric(today_upd["reading"], errors="coerce").fillna(0).astype(int)
-    today_upd["water_quantity"] = pd.to_numeric(today_upd["water_quantity"], errors="coerce").fillna(0.0).round(2)
+    today_upd["Scheme Name"] = today_upd.get("Scheme Display", "")
+    today_upd["reading"] = pd.to_numeric(today_upd.get("reading", 0), errors="coerce").fillna(0).astype(int)
+    today_upd["water_quantity"] = pd.to_numeric(today_upd.get("water_quantity", 0.0), errors="coerce").fillna(0.0).round(2)
     today_upd["BFM Reading Display"] = today_upd["reading"].apply(lambda x: f"{x:06d}")
 
-    # Build table with Reading Time immediately after Reading, remove stray left column by inserting S.No at index 0
-    daily_bfm = today_upd[["jalmitra","Scheme Name","BFM Reading Display","reading_time","water_quantity"]].copy()
+    # Build table with Reading Time immediately after Reading
+    daily_bfm = today_upd[["jalmitra","Scheme Display","BFM Reading Display","reading_time","water_quantity"]].copy()
     daily_bfm.columns = ["Jalmitra","Scheme Name","BFM Reading","Reading Time","Water Quantity (m³)"]
     daily_bfm = daily_bfm.sort_values("Jalmitra").reset_index(drop=True)
     daily_bfm.insert(0, "S.No", range(1, len(daily_bfm)+1))

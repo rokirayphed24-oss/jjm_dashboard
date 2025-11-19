@@ -621,7 +621,7 @@ if role == "Executive Engineer":
     if exec_generate:
         total_schemes_exec = 300
         total_jalmitras_exec = 250
-        eees = ["AEE Alpha", "AEE Beta"]
+        eees = ["AEE ROKI", "AEE ANWAR"]
         schemes_rows = []
         readings_rows = []
         jm_list = [f"ExecJM_{i+1}" for i in range(total_jalmitras_exec)]
@@ -1087,3 +1087,4 @@ readings_df = st.session_state.get("readings", pd.DataFrame())
 st.download_button("Schemes CSV", schemes_df.to_csv(index=False).encode("utf-8"), "schemes.csv")
 st.download_button("Readings CSV", readings_df.to_csv(index=False).encode("utf-8"), "readings.csv")
 st.success(f"Dashboard ready. Demo data generated: {st.session_state.get('demo_generated', False)}")
+

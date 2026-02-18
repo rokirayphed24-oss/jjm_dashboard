@@ -1063,7 +1063,9 @@ def render_so_dashboard(so_to_render: str):
 
 # --------------------------- Render logic -----------
 if role == "Section Officer":
-    query_so = st.experimental_get_query_params().get("so", [None])[0] if st.experimental_get_query_params() else None
+    query_params = st.query_params
+query_so = query_params.get("so", None)
+
     if query_so:
         render_so_dashboard(query_so)
     else:

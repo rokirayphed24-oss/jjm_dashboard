@@ -1063,29 +1063,18 @@
 +                    st.session_state["selected_jalmitra"] = None
 +
 +# --------------------------- Render logic -----------
-+if role == "Section Officer":
-+    if hasattr(st, "query_params"):
-+        query_so = st.query_params.get("so", None)
-+        if isinstance(query_so, list):
-+            query_so = query_so[0] if query_so else None
-+    else:
-+        _params = st.experimental_get_query_params()
-+        query_so = _params.get("so", [None])[0] if _params else None
-+    if query_so:
-+        render_so_dashboard(query_so)
-+    else:
-+        render_so_dashboard("ROKI RAY")
-+
-+elif role == "Assistant Executive Engineer":
-+    # AEE page already rendered above when role selected
-+    pass
-+elif role == "Executive Engineer":
-+    # Exec page rendered above
-+    pass
-+else:
-+    st.header(f"{role} Dashboard — Placeholder")
-+    st.info("Placeholder view. Implement similarly when needed.")
-+
+if role == "Section Officer":
+    if hasattr(st, "query_params"):
+        query_so = st.query_params.get("so", None)
+        if isinstance(query_so, list):
+            query_so = query_so[0] if query_so else None
+    else:
+        _params = st.experimental_get_query_params()
+        query_so = _params.get("so", [None])[0] if _params else None
+    if query_so:
+        render_so_dashboard(query_so)
+    else:
+        render_so_dashboard("ROKI RAY")
 +# --------------------------- Exports & footer -----------
 +st.markdown("---")
 +st.subheader("📤 Export Snapshot")
